@@ -1,4 +1,4 @@
-- 👋 Hi, I’m @leo8190
+- 👋 Hi, I’m Leonardo Apollonio
 - 👀 I’m interested in programming, web and mobile application development, video game development, technology, music, singing and travel.
 - 🌱 I’m currently keep on learning more and perfecting myself about the .NET ecosystem, AngularJS, and ReactJS. Also about SQL Server databases.
 - 💞️ I’m looking to collaborate on the development of applications that contributes to create efficient solutions for the people.
