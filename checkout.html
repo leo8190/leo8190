@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Join the paid beta — ClickReports</title>
+  <meta name="description" content="Reserve your seat in the ClickReports paid beta." />
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script src="assets/config.js"></script>
+  <script src="assets/analytics.js"></script>
+  <script src="assets/forms.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="brand" href="index.html"><span class="logo">📄</span> ClickReports</a>
+      <nav class="nav-links">
+        <a href="index.html">Product</a>
+        <a href="pricing.html">Pricing</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" style="padding:60px 0 24px;">
+      <div class="container">
+        <span class="eyebrow">Step 2 of 2 · Reserve your seat</span>
+        <h1 style="font-size:clamp(28px,4vw,40px);">You're joining the paid beta</h1>
+        <p class="sub">Confirm your plan and leave your email. We'll reach out to activate your seat — no card charged on this page.</p>
+      </div>
+    </section>
+
+    <section style="padding-top:0;">
+      <div class="container checkout-wrap">
+        <!-- Resumen del plan (se rellena con ?tier=) -->
+        <div class="summary">
+          <div class="row">
+            <span class="muted">Selected plan</span>
+            <strong id="plan-name">Starter</strong>
+          </div>
+          <div class="row">
+            <span class="muted">Billing</span>
+            <span id="plan-billing">Monthly · cancel anytime</span>
+          </div>
+          <div class="row">
+            <span>Total today</span>
+            <span><span id="plan-price">$19</span> <span class="muted" style="font-size:14px;">/mo after beta confirmation</span></span>
+          </div>
+        </div>
+
+        <!-- Botón de "checkout" (dispara checkout_attempt) + formulario de email -->
+        <button class="btn btn-primary btn-block btn-lg"
+                id="checkout-btn"
+                data-track="checkout_attempt">Start paid beta →</button>
+
+        <form class="email-form" data-email-form hidden id="email-form">
+          <p style="margin:0; color:var(--muted);">We're opening limited beta seats. Leave your email and we'll give you priority access to your <strong id="plan-name-2">Starter</strong> plan.</p>
+          <input type="email" name="email" placeholder="you@agency.com" required autocomplete="email" />
+          <button type="submit" class="btn btn-primary btn-lg">Reserve my seat</button>
+          <p style="font-size:13px; color:var(--muted); margin:0;">No card required now. We'll email you to confirm and activate billing.</p>
+        </form>
+
+        <!-- Confirmación (lista de espera) -->
+        <div class="success-box" data-email-success hidden>
+          <div class="ic">🎉</div>
+          <h3>You're on the list!</h3>
+          <p>Thanks for joining the ClickReports paid beta. We'll email you shortly to activate your plan and get you set up. Limited seats — you're in the priority queue.</p>
+        </div>
+
+        <p class="disclaimer" style="margin-top:26px; text-align:center;">
+          This is an early-access beta. Not affiliated with or endorsed by ClickUp.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>© 2026 ClickReports · Paid private beta</p>
+      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by ClickUp. “ClickUp” is a trademark of its respective owner.</p>
+    </div>
+  </footer>
+
+  <script>
+    // Rellenar el resumen según ?tier= y revelar el formulario tras "checkout_attempt".
+    (function () {
+      var CFG = window.SMOKE_CONFIG || {};
+      var plans = (CFG.product && CFG.product.plans) || {
+        starter: { label: "Starter", price: 19 },
+        pro: { label: "Pro", price: 49 }
+      };
+      var params = new URLSearchParams(location.search);
+      var tier = (params.get("tier") || "starter").toLowerCase();
+      if (!plans[tier]) tier = "starter";
+      var plan = plans[tier];
+
+      document.getElementById("plan-name").textContent = plan.label;
+      document.getElementById("plan-name-2").textContent = plan.label;
+      document.getElementById("plan-price").textContent = "$" + plan.price;
+
+      // Al hacer "checkout" se revela el formulario de email (el evento ya lo dispara data-track).
+      var btn = document.getElementById("checkout-btn");
+      var form = document.getElementById("email-form");
+      btn.addEventListener("click", function () {
+        btn.style.display = "none";
+        form.hidden = false;
+        form.scrollIntoView({ behavior: "smooth", block: "center" });
+        var input = form.querySelector('input[type="email"]');
+        if (input) input.focus();
+      });
+    })();
+  </script>
+</body>
+</html>

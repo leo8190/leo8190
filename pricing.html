@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pricing — ClickUp Client PDF Reports</title>
+  <meta name="description" content="Simple pricing for ClickReports. Starter $19/mo, Pro $49/mo. Join the paid beta." />
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script src="assets/config.js"></script>
+  <script src="assets/analytics.js"></script>
+  <script>
+    // pricing_view se dispara aquí (además del page_view automático).
+    document.addEventListener("DOMContentLoaded", function () {
+      if (window.track) window.track("pricing_view", {});
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="brand" href="index.html"><span class="logo">📄</span> ClickReports</a>
+      <nav class="nav-links">
+        <a href="index.html">Product</a>
+        <a href="pricing.html">Pricing</a>
+        <a class="btn btn-primary" href="#plans" data-track="cta_click" data-location="nav">Start paid beta</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" style="padding-bottom:30px;">
+      <div class="container">
+        <span class="eyebrow">Paid beta pricing</span>
+        <h1 style="font-size:clamp(30px,4.5vw,46px);">Simple pricing. Lock in beta rates.</h1>
+        <p class="sub">Pick a plan to join the paid beta. No credit card collected on this page — we confirm your seat by email first.</p>
+      </div>
+    </section>
+
+    <section id="plans" style="padding-top:10px;">
+      <div class="container">
+        <div class="plans">
+          <!-- STARTER -->
+          <div class="plan">
+            <h3>Starter</h3>
+            <div class="price">$19<span> / mo</span></div>
+            <p class="desc">For freelancers and solo consultants reporting to a few clients.</p>
+            <ul class="features">
+              <li>Up to 5 client reports / month</li>
+              <li>Pull from any ClickUp list</li>
+              <li>Clean PDF templates</li>
+              <li>Your logo &amp; brand color</li>
+              <li>Email support</li>
+            </ul>
+            <a class="btn btn-primary btn-block btn-lg"
+               href="checkout.html?tier=starter"
+               data-track="pricing_tier_click" data-tier="starter">Start paid beta</a>
+          </div>
+
+          <!-- PRO -->
+          <div class="plan popular">
+            <span class="tag">Most popular</span>
+            <h3>Pro</h3>
+            <div class="price">$49<span> / mo</span></div>
+            <p class="desc">For agencies and consultants running multiple client retainers.</p>
+            <ul class="features">
+              <li>Unlimited client reports</li>
+              <li>Multiple ClickUp workspaces</li>
+              <li>Branded templates &amp; cover pages</li>
+              <li>Scheduled / automated reports</li>
+              <li>Custom fields &amp; charts</li>
+              <li>Priority support</li>
+            </ul>
+            <a class="btn btn-primary btn-block btn-lg"
+               href="checkout.html?tier=pro"
+               data-track="pricing_tier_click" data-tier="pro">Start paid beta</a>
+          </div>
+        </div>
+
+        <!-- FAQ -->
+        <div class="faq" style="margin-top:60px;">
+          <div class="section-head"><h2>Questions</h2></div>
+          <details>
+            <summary>Is this live yet?</summary>
+            <p>We're in a paid private beta. Joining reserves your seat and beta pricing; we onboard members in small batches and confirm by email before any charge.</p>
+          </details>
+          <details>
+            <summary>Will I be charged right now?</summary>
+            <p>No. This page doesn't collect card details. You tell us which plan you want, leave your email, and we reach out to activate your seat.</p>
+          </details>
+          <details>
+            <summary>Can I cancel?</summary>
+            <p>Yes — it's month-to-month and you can cancel anytime once you're onboarded.</p>
+          </details>
+          <details>
+            <summary>Which ClickUp plans does it work with?</summary>
+            <p>The beta is designed to work with standard ClickUp workspaces. We'll confirm compatibility with your setup during onboarding.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>© 2026 ClickReports · Paid private beta</p>
+      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by ClickUp. “ClickUp” is a trademark of its respective owner. This is an early-access landing page.</p>
+    </div>
+  </footer>
+</body>
+</html>
