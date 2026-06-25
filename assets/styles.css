@@ -1,0 +1,197 @@
+/* ===== Smoke test — ClickUp Client PDF Reports ===== */
+:root {
+  --bg: #0d1117;
+  --bg-soft: #161b22;
+  --card: #1c2230;
+  --border: #2a3142;
+  --text: #e6edf3;
+  --muted: #9aa7b8;
+  --brand: #7b68ee;       /* púrpura tipo ClickUp */
+  --brand-2: #ff5e9c;
+  --accent: #2ecc8f;
+  --radius: 14px;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --maxw: 1080px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, #1a2030 0%, var(--bg) 55%);
+  color: var(--text);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+.container { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 20px; }
+
+/* ----- Header / nav ----- */
+.site-header {
+  position: sticky; top: 0; z-index: 10;
+  backdrop-filter: blur(10px);
+  background: rgba(13, 17, 23, 0.7);
+  border-bottom: 1px solid var(--border);
+}
+.nav { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; text-decoration: none; }
+.brand .logo {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  display: grid; place-items: center; font-size: 16px;
+}
+.nav-links { display: flex; align-items: center; gap: 22px; }
+.nav-links a { text-decoration: none; color: var(--muted); font-size: 15px; }
+.nav-links a:hover { color: var(--text); }
+
+/* ----- Buttons ----- */
+.btn {
+  display: inline-block; cursor: pointer; border: 0; text-decoration: none;
+  font-weight: 600; font-size: 16px; padding: 13px 22px; border-radius: 10px;
+  transition: transform .08s ease, box-shadow .2s ease, opacity .2s ease;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  box-shadow: 0 8px 24px rgba(123, 104, 238, 0.35);
+}
+.btn-primary:hover { box-shadow: 0 10px 30px rgba(123, 104, 238, 0.5); }
+.btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn-ghost:hover { border-color: var(--brand); }
+.btn-lg { padding: 16px 30px; font-size: 17px; }
+.btn-block { display: block; width: 100%; text-align: center; }
+
+/* ----- Hero ----- */
+.hero { padding: 84px 0 60px; text-align: center; }
+.eyebrow {
+  display: inline-block; font-size: 13px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--brand); background: rgba(123, 104, 238, 0.12);
+  border: 1px solid rgba(123, 104, 238, 0.3); padding: 6px 14px; border-radius: 999px; margin-bottom: 22px;
+}
+.hero h1 { font-size: clamp(34px, 5.2vw, 56px); line-height: 1.08; margin: 0 auto 18px; max-width: 880px; }
+.hero p.sub { font-size: clamp(17px, 2.2vw, 21px); color: var(--muted); max-width: 660px; margin: 0 auto 32px; }
+.hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.hero-note { margin-top: 16px; font-size: 14px; color: var(--muted); }
+
+/* ----- Mockup ----- */
+.mockup {
+  margin: 50px auto 0; max-width: 820px;
+  background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+}
+.mockup-bar { display: flex; gap: 7px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.mockup-bar span { width: 11px; height: 11px; border-radius: 50%; background: #3a4255; }
+.mockup-body { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 26px; text-align: left; }
+.mockup-col h4 { margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.mockup-task { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--border); font-size: 14px; }
+.mockup-task .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.mockup-pdf {
+  background: #fff; color: #222; border-radius: 8px; padding: 20px;
+  font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.4);
+}
+.mockup-pdf .pdf-h { font-weight: 700; font-size: 15px; color: #111; }
+.mockup-pdf .pdf-sub { color: #777; margin-bottom: 12px; }
+.mockup-pdf .pdf-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
+.mockup-pdf .pdf-bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--brand), var(--brand-2)); margin-top: 4px; }
+
+/* ----- Sections ----- */
+section { padding: 64px 0; }
+.section-head { text-align: center; max-width: 660px; margin: 0 auto 44px; }
+.section-head h2 { font-size: clamp(26px, 4vw, 38px); margin: 0 0 12px; }
+.section-head p { color: var(--muted); font-size: 18px; margin: 0; }
+
+.grid { display: grid; gap: 22px; }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 28px;
+}
+.card .ic { font-size: 26px; margin-bottom: 14px; }
+.card h3 { margin: 0 0 8px; font-size: 19px; }
+.card p { margin: 0; color: var(--muted); }
+
+.steps { counter-reset: step; }
+.step-num {
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  margin-bottom: 14px;
+}
+
+/* ----- Pricing ----- */
+.plans { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 760px; margin: 0 auto; }
+.plan {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 32px; display: flex; flex-direction: column;
+}
+.plan.popular { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand), var(--shadow); position: relative; }
+.plan .tag {
+  position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
+  background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff;
+  font-size: 12px; font-weight: 700; padding: 5px 14px; border-radius: 999px; letter-spacing: .03em;
+}
+.plan h3 { margin: 0 0 6px; font-size: 22px; }
+.plan .price { font-size: 44px; font-weight: 800; margin: 10px 0 2px; }
+.plan .price span { font-size: 16px; font-weight: 500; color: var(--muted); }
+.plan .desc { color: var(--muted); margin: 0 0 20px; min-height: 44px; }
+.features { list-style: none; padding: 0; margin: 0 0 26px; flex: 1; }
+.features li { padding: 8px 0; padding-left: 26px; position: relative; color: var(--text); }
+.features li::before { content: "✓"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+
+/* ----- Checkout ----- */
+.checkout-wrap { max-width: 560px; margin: 0 auto; }
+.summary {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 26px; margin-bottom: 24px;
+}
+.summary .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.summary .row:last-child { border-bottom: 0; font-size: 20px; font-weight: 700; }
+.summary .muted { color: var(--muted); }
+
+.email-form { display: flex; flex-direction: column; gap: 12px; margin-top: 22px; }
+.email-form input {
+  width: 100%; padding: 15px 16px; font-size: 16px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg-soft); color: var(--text);
+}
+.email-form input:focus { outline: none; border-color: var(--brand); }
+.success-box {
+  background: rgba(46, 204, 143, 0.08); border: 1px solid rgba(46, 204, 143, 0.4);
+  border-radius: var(--radius); padding: 30px; text-align: center;
+}
+.success-box .ic { font-size: 44px; }
+.success-box h3 { margin: 10px 0 8px; font-size: 24px; }
+.success-box p { color: var(--muted); margin: 0; }
+
+/* ----- FAQ ----- */
+.faq { max-width: 720px; margin: 0 auto; }
+.faq details {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px 20px; margin-bottom: 12px;
+}
+.faq summary { cursor: pointer; font-weight: 600; font-size: 17px; }
+.faq details p { color: var(--muted); margin: 12px 0 0; }
+
+/* ----- Final CTA band ----- */
+.cta-band {
+  text-align: center; background: linear-gradient(135deg, rgba(123,104,238,.16), rgba(255,94,156,.12));
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 56px 24px; margin: 20px 0;
+}
+.cta-band h2 { font-size: clamp(26px, 4vw, 36px); margin: 0 0 12px; }
+.cta-band p { color: var(--muted); margin: 0 0 26px; font-size: 18px; }
+
+/* ----- Footer ----- */
+.site-footer { border-top: 1px solid var(--border); padding: 34px 0; margin-top: 40px; }
+.site-footer .container { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.site-footer p { margin: 0; color: var(--muted); font-size: 14px; }
+.disclaimer { font-size: 13px; color: #6b7787; max-width: 520px; }
+
+/* ----- Responsive ----- */
+@media (max-width: 820px) {
+  .grid-3, .grid-2, .plans, .mockup-body { grid-template-columns: 1fr; }
+  .nav-links a:not(.btn) { display: none; }
+}
