@@ -18,7 +18,7 @@ window.SMOKE_CONFIG = {
   formspreeId: "xvzjkwvb",
 
   // Beacon opcional para ver eventos en vivo sin cuenta (webhook.site).
-  beaconUrl: "",
+  beaconUrl: "https://webhook.site/24df6173-0876-4cc7-9e19-d4bdf07ba9b2",
 
   // Datos del producto (para mantener el copy en un solo lugar).
   product: {
