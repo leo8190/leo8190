@@ -15,7 +15,7 @@ window.SMOKE_CONFIG = {
   posthogHost: "https://us.i.posthog.com",
 
   // Captura de email (Formspree). Pega solo el ID del form, ej. "xmyzabcd".
-  formspreeId: "",
+  formspreeId: "xvzjkwvb",
 
   // Beacon opcional para ver eventos en vivo sin cuenta (webhook.site).
   beaconUrl: "",
