@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Join the paid beta — ClickReports</title>
-  <meta name="description" content="Reserve your seat in the ClickReports paid beta." />
+  <title>Join the paid beta — ReportKit</title>
+  <meta name="description" content="Reserve your seat in the ReportKit paid beta." />
   <link rel="stylesheet" href="assets/styles.css" />
   <script src="assets/config.js"></script>
   <script src="assets/analytics.js"></script>
@@ -13,7 +13,7 @@
 <body>
   <header class="site-header">
     <div class="container nav">
-      <a class="brand" href="index.html"><span class="logo">📄</span> ClickReports</a>
+      <a class="brand" href="index.html"><span class="logo">📄</span> ReportKit</a>
       <nav class="nav-links">
         <a href="index.html">Product</a>
         <a href="pricing.html">Pricing</a>
@@ -26,7 +26,7 @@
       <div class="container">
         <span class="eyebrow">Step 2 of 2 · Reserve your seat</span>
         <h1 style="font-size:clamp(28px,4vw,40px);">You're joining the paid beta</h1>
-        <p class="sub">Confirm your plan and leave your email to reserve your founding spot. $0 today — you get a 30-day free trial to use it before you pay, then your founding rate. No card on this page.</p>
+        <p class="sub">Confirm your plan to reserve your founding spot. No card is collected on this page — we confirm your seat by email.</p>
       </div>
     </section>
 
@@ -43,12 +43,12 @@
             <span><span id="plan-price">$19</span> <span class="muted" style="font-size:14px;">/mo</span></span>
           </div>
           <div class="row">
-            <span class="muted">Free trial</span>
-            <span>30 days, then monthly · cancel anytime</span>
+            <span class="muted">Billing</span>
+            <span>Monthly · cancel anytime</span>
           </div>
           <div class="row">
             <span>Due today</span>
-            <span>$0 <span class="muted" style="font-size:14px;">— free for 30 days first</span></span>
+            <span>$0 <span class="muted" style="font-size:14px;">— we confirm by email first</span></span>
           </div>
         </div>
 
@@ -58,21 +58,24 @@
                 data-track="checkout_attempt">Start paid beta →</button>
 
         <form class="email-form" data-email-form hidden id="email-form">
-          <p style="margin:0; color:var(--muted);">Opening limited founding spots. Leave your email to reserve your <strong id="plan-name-2">Starter</strong> spot — nothing is charged today. You get a 30-day free trial to use it before you pay, then your founding rate, locked in. We onboard every member personally.</p>
+          <p style="margin:0; color:var(--muted);">
+            <strong style="color:var(--text);">We’re onboarding the first beta users. Leave your email for early access.</strong><br />
+            Your <strong id="plan-name-2">Starter</strong> founding rate stays locked in — nothing is charged today.
+          </p>
           <input type="email" name="email" placeholder="you@agency.com" required autocomplete="email" />
-          <button type="submit" class="btn btn-primary btn-lg">Reserve my seat</button>
-          <p style="font-size:13px; color:var(--muted); margin:0;">No card required now. We'll email you to confirm and activate billing.</p>
+          <button type="submit" class="btn btn-primary btn-lg">Get early access</button>
+          <p style="font-size:13px; color:var(--muted); margin:0;">No card required now. We'll email you to confirm your seat and activate billing.</p>
         </form>
 
         <!-- Confirmación (lista de espera) -->
         <div class="success-box" data-email-success hidden>
           <div class="ic">🎉</div>
           <h3>You're on the list!</h3>
-          <p>Thanks for reserving your founding spot. We'll email you shortly to start your 30-day free trial and onboard you personally. Limited seats — you're in the priority queue.</p>
+          <p>Thanks for reserving your founding spot. We'll email you shortly to onboard you personally. Limited seats — you're in the priority queue.</p>
         </div>
 
         <p class="disclaimer" style="margin-top:26px; text-align:center;">
-          This is an early-access beta. Not affiliated with or endorsed by ClickUp.
+          This is an early-access beta. Not affiliated with or endorsed by Notion.
         </p>
       </div>
     </section>
@@ -80,8 +83,8 @@
 
   <footer class="site-footer">
     <div class="container">
-      <p>© 2026 ClickReports · Paid private beta</p>
-      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by ClickUp. “ClickUp” is a trademark of its respective owner.</p>
+      <p>© 2026 ReportKit · Paid private beta</p>
+      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by Notion. “Notion” is a trademark of Notion Labs, Inc.</p>
     </div>
   </footer>
 

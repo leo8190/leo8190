@@ -76,6 +76,40 @@
     catch (e) { return []; }
   };
 
+  // Embudo del smoke test: cuenta eventos locales y calcula tasas de conversión.
+  // (Con PostHog activo, el embudo real multi-visitante se ve en su dashboard;
+  //  esto sirve para verificar el cableado y para revisar un navegador concreto.)
+  window.stats = function () {
+    var events = window.dumpEvents();
+    function count(name) {
+      return events.filter(function (e) { return e.event === name; }).length;
+    }
+    function rate(a, b) { return b ? Math.round((a / b) * 1000) / 10 + "%" : "n/a"; }
+
+    var pageViews = count("page_view");
+    var pricingViews = count("pricing_view");
+    var ctaClicks = count("cta_click");
+    var tierClicks = count("pricing_tier_click");
+    var checkoutAttempts = count("checkout_attempt");
+    var emailSignups = count("email_signup");
+
+    return {
+      page_views: pageViews,
+      pricing_views: pricingViews,
+      cta_clicks: ctaClicks,
+      pricing_tier_clicks: tierClicks,
+      checkout_attempts: checkoutAttempts,
+      email_signups: emailSignups,
+      conversion: {
+        "visit -> pricing": rate(pricingViews, pageViews),
+        "pricing -> plan click": rate(tierClicks, pricingViews),
+        "plan click -> checkout attempt": rate(checkoutAttempts, tierClicks),
+        "checkout attempt -> email": rate(emailSignups, checkoutAttempts),
+        "visit -> checkout attempt": rate(checkoutAttempts, pageViews)
+      }
+    };
+  };
+
   // Cablear clics en CTAs de forma declarativa: cualquier elemento con
   // data-track="cta_click" dispara el evento (con data-* extra como props).
   function wireDataTracks() {

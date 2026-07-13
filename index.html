@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ClickUp Client PDF Reports — client-ready reports in minutes</title>
-  <meta name="description" content="Beautiful, branded client PDF reports straight from ClickUp — no Business plan, no BI tool. Built for agencies, freelancers and consultants." />
+  <title>Notion Branded PDF Reports — client-ready reports in minutes</title>
+  <meta name="description" content="Turn your Notion databases into polished, branded PDF reports. Built for agencies, consultants and freelancers." />
   <link rel="stylesheet" href="assets/styles.css" />
   <script src="assets/config.js"></script>
   <script src="assets/analytics.js"></script>
@@ -13,7 +13,7 @@
   <header class="site-header">
     <div class="container nav">
       <a class="brand" href="index.html">
-        <span class="logo">📄</span> ClickReports
+        <span class="logo">📄</span> ReportKit
       </a>
       <nav class="nav-links">
         <a href="index.html">Product</a>
@@ -27,33 +27,38 @@
     <!-- HERO -->
     <section class="hero">
       <div class="container">
-        <span class="eyebrow">ClickUp-native · built for client work</span>
-        <h1>Turn ClickUp tasks into client-ready PDF reports in minutes.</h1>
+        <span class="eyebrow">Notion-native · built for client work</span>
+        <h1>Turn your Notion databases into client-ready PDF reports in minutes.</h1>
         <p class="sub">
-          Beautiful, branded client reports straight from ClickUp — ready out of the box,
-          no design work, no copy-pasting task lists into slides the night before the call.
+          Polished, branded PDF reports straight from the Notion databases you already keep —
+          no design work, no copy-pasting rows into slides the night before the client call.
         </p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-lg" href="pricing.html" data-track="cta_click" data-location="hero">Start paid beta</a>
           <a class="btn btn-ghost btn-lg" href="pricing.html">See pricing</a>
         </div>
-        <p class="hero-note">Founding beta · 30-day free trial · $0 today · cancel anytime</p>
+        <p class="hero-note">Paid beta · limited founding seats · cancel anytime</p>
 
-        <!-- Static mockup (visual only, not functional) -->
+        <!-- BEFORE / AFTER MOCKUP (visual only, not functional) -->
         <div class="mockup" aria-hidden="true">
           <div class="mockup-bar"><span></span><span></span><span></span></div>
           <div class="mockup-body">
             <div class="mockup-col">
-              <h4>ClickUp list</h4>
-              <div class="mockup-task"><span class="dot" style="background:#2ecc8f"></span> Homepage redesign — Done</div>
-              <div class="mockup-task"><span class="dot" style="background:#7b68ee"></span> SEO audit — In progress</div>
-              <div class="mockup-task"><span class="dot" style="background:#ff5e9c"></span> Q3 campaign — Review</div>
-              <div class="mockup-task"><span class="dot" style="background:#f5a623"></span> Analytics setup — To do</div>
+              <h4>Before — your Notion database</h4>
+              <div class="mockup-db">
+                <div class="db-row">📌 Homepage redesign <span class="pill pill-done">Done</span></div>
+                <div class="db-row">🔍 SEO audit <span class="pill pill-progress">In progress</span></div>
+                <div class="db-row">📣 Q3 campaign <span class="pill pill-review">In review</span></div>
+                <div class="db-row">📈 Analytics setup <span class="pill pill-todo">To do</span></div>
+                <div class="db-row">✍️ Content calendar <span class="pill pill-done">Done</span></div>
+              </div>
             </div>
+            <div class="mockup-arrow">→</div>
             <div class="mockup-col">
-              <h4>Generated PDF</h4>
+              <h4>After — your branded PDF</h4>
               <div class="mockup-pdf">
-                <div class="pdf-h">Acme Co — Monthly Report</div>
+                <div class="pdf-brandbar"></div>
+                <div class="pdf-h">Acme Co — Monthly Status Report</div>
                 <div class="pdf-sub">June 2026 · Prepared by Your Agency</div>
                 <div class="pdf-row"><span>Tasks completed</span><strong>18</strong></div>
                 <div class="pdf-row"><span>In progress</span><strong>6</strong></div>
@@ -66,95 +71,161 @@
       </div>
     </section>
 
-    <!-- PROBLEM -->
+    <!-- BENEFITS -->
     <section>
       <div class="container">
         <div class="section-head">
           <h2>Client reporting shouldn't eat your billable hours</h2>
-          <p>You love running work in ClickUp — turning it into a polished client report is the part that drags.</p>
+          <p>You already run everything in Notion — turning it into a polished client document is the part that drags.</p>
         </div>
         <div class="grid grid-3">
           <div class="card">
             <div class="ic">⏱️</div>
-            <h3>Hours every month</h3>
-            <p>Exporting, screenshotting and reformatting data into a document — time you can't bill to anyone.</p>
+            <h3>Hours back, every month</h3>
+            <p>Stop exporting, screenshotting and reformatting database views into documents — time you can't bill to anyone.</p>
           </div>
           <div class="card">
             <div class="ic">🎨</div>
-            <h3>Design takes effort</h3>
-            <p>Making a report that looks as good as your work usually means fiddling in slides or docs.</p>
+            <h3>Your brand, by default</h3>
+            <p>Every report carries your logo, colors and cover page. It looks designed — without a designer.</p>
           </div>
           <div class="card">
             <div class="ic">🔁</div>
-            <h3>Same chore, every client</h3>
-            <p>Multiply that across every retainer, every month. It never really ends.</p>
+            <h3>Repeatable across clients</h3>
+            <p>Set a template once and reuse it for every retainer, every month. Same polish, zero extra effort.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- USE CASES -->
+    <section class="section-soft">
+      <div class="container">
+        <div class="section-head">
+          <h2>One database, many deliverables</h2>
+          <p>If it lives in a Notion database, it can leave as a client-ready PDF.</p>
+        </div>
+        <div class="grid grid-4">
+          <div class="card">
+            <div class="ic">📊</div>
+            <h3>Project status reports</h3>
+            <p>Turn your tasks database into a clean weekly or sprint status update clients actually read.</p>
+          </div>
+          <div class="card">
+            <div class="ic">📦</div>
+            <h3>Client deliverables</h3>
+            <p>Package research, audits and recommendations into a branded document worth your rate.</p>
+          </div>
+          <div class="card">
+            <div class="ic">🗓️</div>
+            <h3>Monthly reports</h3>
+            <p>Recurring retainer reports generated from the same database view — every month, on schedule.</p>
+          </div>
+          <div class="card">
+            <div class="ic">📋</div>
+            <h3>Product &amp; spec sheets</h3>
+            <p>Export product catalogs, feature specs or inventory databases as shareable one-pagers.</p>
           </div>
         </div>
       </div>
     </section>
 
     <!-- HOW IT WORKS -->
-    <section style="background: var(--bg-soft); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+    <section>
       <div class="container">
         <div class="section-head">
           <h2>Beautiful by default, in 3 steps</h2>
-          <p>No templates to wire up, no BI setup. Connect, brand, export — done.</p>
+          <p>No templates to wire up, no export gymnastics. Connect, brand, export — done.</p>
         </div>
-        <div class="grid grid-3 steps">
+        <div class="grid grid-3">
           <div class="card">
             <div class="step-num">1</div>
-            <h3>Connect your list</h3>
-            <p>Point at any ClickUp Space, Folder or List. Your tasks, statuses and custom fields come along.</p>
+            <h3>Connect your database</h3>
+            <p>Point at any Notion database. Your properties, statuses and views come along automatically.</p>
           </div>
           <div class="card">
             <div class="step-num">2</div>
-            <h3>Pick a template</h3>
+            <h3>Pick a template &amp; brand it</h3>
             <p>Choose a clean report layout, add your logo and brand colors, and select what the client sees.</p>
           </div>
           <div class="card">
             <div class="step-num">3</div>
             <h3>Export the PDF</h3>
-            <p>Download a polished, client-ready PDF in seconds — or schedule it to send automatically.</p>
+            <p>Download a polished, client-ready PDF in seconds — or schedule it to generate every month.</p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- WHO IT'S FOR -->
-    <section>
+    <!-- PRICING -->
+    <section class="section-soft" id="pricing">
       <div class="container">
         <div class="section-head">
-          <h2>Built for people who bill clients</h2>
-          <p>If reporting is part of how you keep clients happy, this is for you.</p>
+          <h2>Simple pricing, founding-member rates</h2>
+          <p>Join the paid beta and lock in your rate as we grow. Month-to-month, cancel anytime.</p>
         </div>
-        <div class="grid grid-3">
-          <div class="card">
-            <div class="ic">🏢</div>
-            <h3>Agencies</h3>
-            <p>Deliver consistent, branded reports across every account without a dedicated ops person.</p>
+        <div class="plans">
+          <div class="plan">
+            <h3>Starter</h3>
+            <div class="price">$19<span> / mo</span></div>
+            <p class="desc">For freelancers and solo consultants reporting to a few clients.</p>
+            <ul class="features">
+              <li>Up to 5 client reports / month</li>
+              <li>Pull from any Notion database</li>
+              <li>Polished PDF templates, ready out of the box</li>
+              <li>Your logo &amp; brand color</li>
+            </ul>
+            <a class="btn btn-primary btn-block btn-lg"
+               href="checkout.html?tier=starter"
+               data-track="pricing_tier_click" data-tier="starter" data-location="landing">Start paid beta</a>
           </div>
-          <div class="card">
-            <div class="ic">🧑‍💻</div>
-            <h3>Freelancers</h3>
-            <p>Look like a bigger shop. Send reports that justify your rate in a couple of clicks.</p>
-          </div>
-          <div class="card">
-            <div class="ic">📊</div>
-            <h3>Consultants</h3>
-            <p>Turn project progress into a clear narrative your stakeholders can scan in 30 seconds.</p>
+          <div class="plan popular">
+            <span class="tag">Most popular</span>
+            <h3>Pro</h3>
+            <div class="price">$49<span> / mo</span></div>
+            <p class="desc">For agencies and consultants running multiple client retainers.</p>
+            <ul class="features">
+              <li>Unlimited client reports</li>
+              <li>Multiple Notion workspaces</li>
+              <li>Branded templates &amp; cover pages</li>
+              <li>Scheduled monthly reports</li>
+            </ul>
+            <a class="btn btn-primary btn-block btn-lg"
+               href="checkout.html?tier=pro"
+               data-track="pricing_tier_click" data-tier="pro" data-location="landing">Start paid beta</a>
           </div>
         </div>
+        <p style="text-align:center; margin-top:22px;">
+          <a href="pricing.html" style="color:var(--brand);">See full plan details →</a>
+        </p>
       </div>
     </section>
 
-    <!-- SOCIAL PROOF (honest placeholder) -->
-    <section style="padding-top:0;">
+    <!-- FAQ -->
+    <section>
       <div class="container">
-        <div class="card" style="text-align:center; max-width:720px; margin:0 auto;">
-          <p style="color:var(--muted); margin:0;">
-            🚧 We're opening a small founding beta to a handful of ClickUp agencies and freelancers.
-            Join to reserve your spot — nothing is charged today. You get a 30-day free trial to use it before you pay, then your founding rate, locked in.
-          </p>
+        <div class="faq">
+          <div class="section-head"><h2>Frequently asked questions</h2></div>
+          <details>
+            <summary>Is this live yet?</summary>
+            <p>We're in an early paid beta and onboarding founding members in small batches. Joining reserves your spot and founding rate — we confirm by email and set you up personally.</p>
+          </details>
+          <details>
+            <summary>Does it work with my Notion setup?</summary>
+            <p>It's designed to work with any standard Notion database — tasks, projects, CRM, content calendars, product catalogs. We confirm compatibility with your specific setup during onboarding.</p>
+          </details>
+          <details>
+            <summary>Will I be charged right now?</summary>
+            <p>No. This page doesn't collect card details — you pick a plan and leave your email, and we confirm your seat and set up billing when we onboard you.</p>
+          </details>
+          <details>
+            <summary>Can I customize the reports?</summary>
+            <p>Yes — logo, brand colors, cover page and which database properties appear. Pro adds fully branded templates and scheduled reports.</p>
+          </details>
+          <details>
+            <summary>Can I cancel?</summary>
+            <p>Yes — it's month-to-month and you can cancel anytime once you're onboarded.</p>
+          </details>
         </div>
       </div>
     </section>
@@ -164,7 +235,7 @@
       <div class="container">
         <div class="cta-band">
           <h2>Get your reporting time back</h2>
-          <p>Join the paid beta and turn ClickUp into client-ready PDFs this month.</p>
+          <p>Join the paid beta and turn Notion into client-ready PDFs this month.</p>
           <a class="btn btn-primary btn-lg" href="pricing.html" data-track="cta_click" data-location="footer_band">Start paid beta</a>
         </div>
       </div>
@@ -173,9 +244,29 @@
 
   <footer class="site-footer">
     <div class="container">
-      <p>© 2026 ClickReports · Paid private beta</p>
-      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by ClickUp. “ClickUp” is a trademark of its respective owner. This is an early-access landing page.</p>
+      <p>© 2026 ReportKit · Paid private beta</p>
+      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by Notion. “Notion” is a trademark of Notion Labs, Inc. This is an early-access landing page.</p>
     </div>
   </footer>
+
+  <script>
+    // pricing_view también se dispara cuando la sección de precios del landing
+    // entra en pantalla (una sola vez por carga de página).
+    (function () {
+      var fired = false;
+      var el = document.getElementById("pricing");
+      if (!el || !("IntersectionObserver" in window)) return;
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting && !fired) {
+            fired = true;
+            if (window.track) window.track("pricing_view", { source: "landing_section" });
+            obs.disconnect();
+          }
+        });
+      }, { threshold: 0.3 });
+      obs.observe(el);
+    })();
+  </script>
 </body>
 </html>
