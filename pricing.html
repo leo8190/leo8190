@@ -3,22 +3,27 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pricing — ClickUp Client PDF Reports</title>
-  <meta name="description" content="Simple pricing for ClickReports. Starter $19/mo, Pro $49/mo. Join the paid beta." />
+  <title>Pricing — Notion Branded PDF Reports</title>
+  <meta name="description" content="Simple pricing for ReportKit. Starter $19/mo, Pro $49/mo. Join the paid beta." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>" />
+  <meta property="og:title" content="Pricing — Notion Branded PDF Reports" />
+  <meta property="og:description" content="Starter $19/mo, Pro $49/mo. Join the paid beta and lock in founding-member pricing." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary" />
   <link rel="stylesheet" href="assets/styles.css" />
   <script src="assets/config.js"></script>
   <script src="assets/analytics.js"></script>
   <script>
     // pricing_view se dispara aquí (además del page_view automático).
     document.addEventListener("DOMContentLoaded", function () {
-      if (window.track) window.track("pricing_view", {});
+      if (window.track) window.track("pricing_view", { source: "pricing_page" });
     });
   </script>
 </head>
 <body>
   <header class="site-header">
     <div class="container nav">
-      <a class="brand" href="index.html"><span class="logo">📄</span> ClickReports</a>
+      <a class="brand" href="index.html"><span class="logo">📄</span> ReportKit</a>
       <nav class="nav-links">
         <a href="index.html">Product</a>
         <a href="pricing.html">Pricing</a>
@@ -31,8 +36,8 @@
     <section class="hero" style="padding-bottom:30px;">
       <div class="container">
         <span class="eyebrow">Paid beta pricing</span>
-        <h1 style="font-size:clamp(30px,4.5vw,46px);">Founding beta pricing — locked in for early members.</h1>
-        <p class="sub">Join to reserve your founding spot — nothing is charged today. You get a <strong>30-day free trial</strong> to use it before you pay anything, then your founding rate, locked in as we grow. No card collected here — we confirm your seat by email.</p>
+        <h1 style="font-size:clamp(30px,4.5vw,46px);">Founding-member pricing, locked in for early users.</h1>
+        <p class="sub">Join the paid beta to reserve your founding spot. Month-to-month, cancel anytime. No card collected on this site — we confirm your seat by email.</p>
       </div>
     </section>
 
@@ -43,18 +48,17 @@
           <div class="plan">
             <h3>Starter</h3>
             <div class="price">$19<span> / mo</span></div>
-            <p style="margin:0 0 14px; color:var(--accent); font-size:14px;">30-day free trial · $0 today</p>
             <p class="desc">For freelancers and solo consultants reporting to a few clients.</p>
             <ul class="features">
               <li>Up to 5 client reports / month</li>
-              <li>Pull from any ClickUp list</li>
-              <li>Beautiful PDF templates, ready out of the box</li>
+              <li>Pull from any Notion database</li>
+              <li>Polished PDF templates, ready out of the box</li>
               <li>Your logo &amp; brand color</li>
               <li>Email support</li>
             </ul>
             <a class="btn btn-primary btn-block btn-lg"
                href="checkout.html?tier=starter"
-               data-track="pricing_tier_click" data-tier="starter">Start paid beta</a>
+               data-track="pricing_tier_click" data-tier="starter" data-location="pricing_page">Start paid beta</a>
           </div>
 
           <!-- PRO -->
@@ -62,19 +66,18 @@
             <span class="tag">Most popular</span>
             <h3>Pro</h3>
             <div class="price">$49<span> / mo</span></div>
-            <p style="margin:0 0 14px; color:var(--accent); font-size:14px;">30-day free trial · $0 today</p>
             <p class="desc">For agencies and consultants running multiple client retainers.</p>
             <ul class="features">
               <li>Unlimited client reports</li>
-              <li>Multiple ClickUp workspaces</li>
+              <li>Multiple Notion workspaces</li>
               <li>Branded templates &amp; cover pages</li>
-              <li>Scheduled reports auto-sent to clients</li>
-              <li>Custom fields &amp; charts</li>
+              <li>Scheduled monthly reports, auto-generated</li>
+              <li>Custom properties &amp; charts</li>
               <li>Priority support</li>
             </ul>
             <a class="btn btn-primary btn-block btn-lg"
                href="checkout.html?tier=pro"
-               data-track="pricing_tier_click" data-tier="pro">Start paid beta</a>
+               data-track="pricing_tier_click" data-tier="pro" data-location="pricing_page">Start paid beta</a>
           </div>
         </div>
 
@@ -83,27 +86,27 @@
           <div class="section-head"><h2>Questions</h2></div>
           <details>
             <summary>Is this live yet?</summary>
-            <p>We're in an early founding beta and onboarding members in small batches. Joining reserves your founding spot and pricing — we confirm by email and set you up personally, starting with your 30-day free trial before any charge.</p>
+            <p>We're in an early paid beta and onboarding founding members in small batches. Joining reserves your spot and pricing — we confirm by email and set you up personally.</p>
           </details>
           <details>
             <summary>What do I get as a beta member?</summary>
-            <p>Nothing is charged when you join. You get a 30-day free trial to use it before paying anything, then a founding rate that stays locked in as we add features and prices rise later — plus hands-on personal onboarding so your reports match how you actually work with clients.</p>
+            <p>A founding rate that stays locked in as we add features and prices rise later, plus hands-on personal onboarding so your reports match how you actually work with clients.</p>
           </details>
           <details>
-            <summary>How is this different from exporting in ClickUp?</summary>
-            <p>We do one thing really well: beautiful, branded client reports, fast. Connect a list, add your logo, export a polished PDF — no design work, no complex setup. It works alongside ClickUp, pulling your tasks via the API.</p>
+            <summary>How is this different from exporting in Notion?</summary>
+            <p>Notion's built-in export gives you a raw dump of your page. We do one thing really well: polished, branded client reports, fast. Connect a database, add your logo, export a client-ready PDF — no design work, no cleanup.</p>
           </details>
           <details>
             <summary>Will I be charged right now?</summary>
-            <p>No — $0 today. This page doesn't collect card details. You tell us which plan you want and leave your email. You start with a 30-day free trial, and only pay after that if you decide to keep it.</p>
+            <p>No. This page doesn't collect card details. You tell us which plan you want and leave your email — we confirm your seat and set up billing when we onboard you.</p>
           </details>
           <details>
             <summary>Can I cancel?</summary>
             <p>Yes — it's month-to-month and you can cancel anytime once you're onboarded.</p>
           </details>
           <details>
-            <summary>Which ClickUp plans does it work with?</summary>
-            <p>The beta is designed to work with standard ClickUp workspaces. We'll confirm compatibility with your setup during onboarding.</p>
+            <summary>Which Notion plans does it work with?</summary>
+            <p>The beta is designed to work with standard Notion workspaces, free or paid. We'll confirm compatibility with your setup during onboarding.</p>
           </details>
         </div>
       </div>
@@ -112,8 +115,8 @@
 
   <footer class="site-footer">
     <div class="container">
-      <p>© 2026 ClickReports · Paid private beta</p>
-      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by ClickUp. “ClickUp” is a trademark of its respective owner. This is an early-access landing page.</p>
+      <p>© 2026 ReportKit · Paid private beta</p>
+      <p class="disclaimer">Not affiliated with, endorsed by, or sponsored by Notion. “Notion” is a trademark of Notion Labs, Inc. This is an early-access landing page.</p>
     </div>
   </footer>
 </body>

@@ -25,6 +25,32 @@
     }
   }
 
+  // --- Atribución: guarda los UTM de la primera visita (first-touch) ---
+  // Así cada evento lleva la fuente de tráfico y se puede medir el
+  // "tráfico cualificado" del umbral de éxito por canal.
+  function getAttribution() {
+    var KEY = "st_utm";
+    try {
+      var saved = localStorage.getItem(KEY);
+      var params = new URLSearchParams(location.search);
+      var utm = {};
+      ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"].forEach(function (k) {
+        if (params.get(k)) utm[k] = params.get(k);
+      });
+      if (Object.keys(utm).length === 0 && !saved && document.referrer) {
+        utm.referrer = document.referrer;
+      }
+      if (Object.keys(utm).length > 0 && !saved) {
+        localStorage.setItem(KEY, JSON.stringify(utm));
+        return utm;
+      }
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  var ATTRIBUTION = getAttribution();
+
   // --- PostHog (solo si hay clave) ---
   function initPostHog() {
     if (!CFG.posthogKey) return;
@@ -49,6 +75,7 @@
         anonId: getAnonId(),
         path: location.pathname + location.search
       },
+      ATTRIBUTION,
       props || {}
     );
 
@@ -74,6 +101,40 @@
   window.dumpEvents = function () {
     try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); }
     catch (e) { return []; }
+  };
+
+  // Embudo del smoke test: cuenta eventos locales y calcula tasas de conversión.
+  // (Con PostHog activo, el embudo real multi-visitante se ve en su dashboard;
+  //  esto sirve para verificar el cableado y para revisar un navegador concreto.)
+  window.stats = function () {
+    var events = window.dumpEvents();
+    function count(name) {
+      return events.filter(function (e) { return e.event === name; }).length;
+    }
+    function rate(a, b) { return b ? Math.round((a / b) * 1000) / 10 + "%" : "n/a"; }
+
+    var pageViews = count("page_view");
+    var pricingViews = count("pricing_view");
+    var ctaClicks = count("cta_click");
+    var tierClicks = count("pricing_tier_click");
+    var checkoutAttempts = count("checkout_attempt");
+    var emailSignups = count("email_signup");
+
+    return {
+      page_views: pageViews,
+      pricing_views: pricingViews,
+      cta_clicks: ctaClicks,
+      pricing_tier_clicks: tierClicks,
+      checkout_attempts: checkoutAttempts,
+      email_signups: emailSignups,
+      conversion: {
+        "visit -> pricing": rate(pricingViews, pageViews),
+        "pricing -> plan click": rate(tierClicks, pricingViews),
+        "plan click -> checkout attempt": rate(checkoutAttempts, tierClicks),
+        "checkout attempt -> email": rate(emailSignups, checkoutAttempts),
+        "visit -> checkout attempt": rate(checkoutAttempts, pageViews)
+      }
+    };
   };
 
   // Cablear clics en CTAs de forma declarativa: cualquier elemento con

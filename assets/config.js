@@ -22,8 +22,8 @@ window.SMOKE_CONFIG = {
 
   // Datos del producto (para mantener el copy en un solo lugar).
   product: {
-    name: "ClickUp Client PDF Reports",
-    tagline: "Turn ClickUp tasks into client-ready PDF reports in minutes.",
+    name: "Notion Branded PDF Reports",
+    tagline: "Turn your Notion databases into client-ready PDF reports in minutes.",
     plans: {
       starter: { label: "Starter", price: 19 },
       pro: { label: "Pro", price: 49 }
