@@ -25,6 +25,32 @@
     }
   }
 
+  // --- Atribución: guarda los UTM de la primera visita (first-touch) ---
+  // Así cada evento lleva la fuente de tráfico y se puede medir el
+  // "tráfico cualificado" del umbral de éxito por canal.
+  function getAttribution() {
+    var KEY = "st_utm";
+    try {
+      var saved = localStorage.getItem(KEY);
+      var params = new URLSearchParams(location.search);
+      var utm = {};
+      ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"].forEach(function (k) {
+        if (params.get(k)) utm[k] = params.get(k);
+      });
+      if (Object.keys(utm).length === 0 && !saved && document.referrer) {
+        utm.referrer = document.referrer;
+      }
+      if (Object.keys(utm).length > 0 && !saved) {
+        localStorage.setItem(KEY, JSON.stringify(utm));
+        return utm;
+      }
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  var ATTRIBUTION = getAttribution();
+
   // --- PostHog (solo si hay clave) ---
   function initPostHog() {
     if (!CFG.posthogKey) return;
@@ -49,6 +75,7 @@
         anonId: getAnonId(),
         path: location.pathname + location.search
       },
+      ATTRIBUTION,
       props || {}
     );
 

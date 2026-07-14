@@ -14,6 +14,8 @@ A static landing site to validate paid demand for **"Turn your Notion databases 
 
 Every event is always logged to the browser console and to `localStorage` (`st_events`), and optionally forwarded to PostHog and/or a webhook.site beacon (see `assets/config.js`).
 
+Attribution: `utm_source` / `utm_medium` / `utm_campaign` / `utm_content` / `utm_term` from the visitor's first landing URL (or the referrer, if no UTMs) are saved once per browser (`st_utm`) and attached to **every** event — so checkout attempts and signups can be segmented by traffic channel. Tag your ad/post links, e.g. `?utm_source=reddit&utm_campaign=notion-pdf-v1`.
+
 | Event | Fires when |
 |---|---|
 | `page_view` | Any page loads |
