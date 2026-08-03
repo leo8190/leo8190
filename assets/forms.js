@@ -49,7 +49,16 @@
         headers: { "Accept": "application/json", "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       })
-        .then(function () { showSuccess(form); })
+        .then(function (res) {
+          // fetch NO rechaza en 4xx/5xx: si el form no existe o está mal
+          // configurado, el email se perdería en silencio. Guardamos copia local
+          // salvo que Formspree confirme que lo recibió.
+          if (!res.ok) {
+            console.warn("[formspree] respondió " + res.status + " — email guardado localmente");
+            saveEmailLocal(payload);
+          }
+          showSuccess(form);
+        })
         .catch(function () { saveEmailLocal(payload); showSuccess(form); });
     } else {
       // Captura local (sin cuenta). Visible en localStorage "st_emails".
