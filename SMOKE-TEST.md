@@ -25,6 +25,8 @@ Attribution: `utm_source` / `utm_medium` / `utm_campaign` / `utm_content` / `utm
 | `checkout_attempt` | The checkout button is clicked |
 | `email_signup` | Email submitted (props: `tier`). Sent to Formspree if configured, else stored in `localStorage` (`st_emails`) |
 
+**Email alerts.** The events that define the success threshold (`checkout_attempt`, `pricing_tier_click` — configurable in `emailAlertEvents`) are also posted to Formspree as they happen, so they land in your inbox with the visitor id, traffic source, campaign and plan. This makes the test self-sufficient without PostHog. Deliberately excludes `page_view` / `pricing_view`: the Formspree free plan allows 50 submissions/month.
+
 Debug helpers in the browser console:
 
 - `dumpEvents()` — raw event log for this browser

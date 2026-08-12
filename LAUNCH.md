@@ -5,18 +5,37 @@ Este documento es el plan de distribución. No toques el código hasta terminarl
 
 ---
 
-## Día 0 (hoy, 30 min) — Dejar el canal de datos verificado
+## Estado del canal de datos: YA VERIFICADO ✅
 
-1. **Confirmá la URL de producción.** Si Vercel sigue conectado, el sitio ya está
-   en línea. Buscá la URL y anotala acá: `___________________`
-2. **Verificá que los emails te lleguen a vos.** Entrá a la URL, hacé el flujo
-   completo (plan → "Start paid beta" → poné tu propio email → enviar).
-   - Si te llega un mail de Formspree a leonardo23322@gmail.com → el form es tuyo. Listo.
-   - Si no llega en 5 minutos → creá uno nuevo en formspree.io y cambiá
-     `formspreeId` en `assets/config.js`.
-3. **Opcional pero recomendado:** creá cuenta gratis en posthog.com y pegá la
-   Project API Key (`phc_...`) en `posthogKey`. Es lo único que te da tasas de
-   conversión reales entre visitantes distintos.
+Confirmado revisando el correo (25 jun 2026): la cuenta de Formspree es de
+leonardo23322@gmail.com y el ID `xvzjkwvb` (form "ClickReports Beta") funciona.
+Está en plan free: **50 envíos/mes**. No hace falta crear nada.
+
+Además, los eventos clave (`checkout_attempt` y `pricing_tier_click`) ahora
+**llegan a tu inbox al instante**, con el canal de origen, el plan y el ID del
+visitante. No necesitás PostHog para correr el test — con el inbox alcanza.
+
+### Historial real de submissions (a 3 ago 2026)
+
+| Fecha | Sitio | Qué fue |
+|---|---|---|
+| 25 jun | leo8190.vercel.app | tu propio email — autotest |
+| **29 jun** | **clickreports.vercel.app** | **`trob4077@gmail.com` — lead real** |
+| 20 jul | tryreportly.netlify.app | `test-smoke@…` — autotest |
+| 25 jul | tryreportly.netlify.app | `checkout_attempt` pro, `utm_source=reddit_test` — autotest |
+
+**1 lead real en 40 días.** No es un "no" del mercado: es falta de tráfico.
+
+### Día 0 (hoy, 15 min)
+
+1. **Elegí UNA URL y matá el resto.** Hay tres sitios vivos (leo8190.vercel.app,
+   clickreports.vercel.app, tryreportly.netlify.app). Dejá una sola, con el
+   producto Notion, y anotala acá: `___________________`
+2. **Escribile a `trob4077@gmail.com`.** Es la única persona que levantó la mano
+   sin que se lo pidieras. Preguntale qué le llamó la atención y cómo hace hoy
+   los reportes. Una respuesta suya vale más que 100 visitas.
+3. *(Opcional)* PostHog gratis en `posthogKey` si querés tasas de conversión
+   finas. No es bloqueante.
 
 ---
 

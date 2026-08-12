@@ -95,6 +95,31 @@
         navigator.sendBeacon(CFG.beaconUrl, blob);
       } catch (e) { /* ignorar */ }
     }
+
+    // 5: aviso por email de los eventos clave (vía Formspree).
+    // Sin PostHog ni ninguna cuenta extra, los intentos de checkout llegan
+    // directo al inbox con el canal de origen. Solo eventos de alto valor:
+    // el plan gratis de Formspree tiene 50 envíos/mes, así que NO se manda
+    // page_view ni pricing_view.
+    if (CFG.formspreeId && CFG.emailAlertEvents &&
+        CFG.emailAlertEvents.indexOf(eventName) !== -1) {
+      try {
+        fetch("https://formspree.io/f/" + CFG.formspreeId, {
+          method: "POST",
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            _subject: "[ReportKit] " + eventName,
+            event: eventName,
+            visitor: evt.anonId,
+            source: evt.utm_source || evt.referrer || "direct",
+            campaign: evt.utm_campaign || "",
+            // En checkout el plan no viene del botón: se lee de ?tier=
+            plan: evt.tier || new URLSearchParams(location.search).get("tier") || "",
+            path: evt.path
+          })
+        }).catch(function () { /* el evento ya quedó en localStorage */ });
+      } catch (e) { /* ignorar */ }
+    }
   };
 
   // Util para depurar: imprime los eventos guardados.
