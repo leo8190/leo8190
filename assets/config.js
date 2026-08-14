@@ -20,6 +20,11 @@ window.SMOKE_CONFIG = {
   // Beacon opcional para ver eventos en vivo sin cuenta (webhook.site).
   beaconUrl: "https://webhook.site/24df6173-0876-4cc7-9e19-d4bdf07ba9b2",
 
+  // Eventos que además se avisan por email (vía Formspree) apenas ocurren.
+  // Mantener corto: el plan free de Formspree permite 50 envíos/mes y estos
+  // son los que definen el umbral de éxito del smoke test.
+  emailAlertEvents: ["checkout_attempt", "pricing_tier_click"],
+
   // Datos del producto (para mantener el copy en un solo lugar).
   product: {
     name: "Notion Branded PDF Reports",
