@@ -44,4 +44,5 @@ A React release-readiness console that turns technical checks and blockers into 
 ## Connect
 
 - [Portfolio](https://leonardo-apollonio-engineer.leon2845.chatgpt.site)
+- [CV (PDF)](https://leonardo-apollonio-engineer.leon2845.chatgpt.site/Leonardo-Apollonio-CV-Full-Stack-DotNet-AI-2026.pdf)
 - [LinkedIn](https://www.linkedin.com/in/leonardo-apollonio/)
