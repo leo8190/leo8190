@@ -17,6 +17,8 @@ class Broker(Protocol):
 
         Raises InsufficientFundsError or OrderRejectedError; never returns a partial
         fake fill. ``market_price`` is the best available current price (paper uses it
-        as the fill base; live may ignore it).
+        as the fill base; live may ignore it). Live brokers raise the OrderRejectedError
+        subclass ``OrderStateUnknownError`` when the order may have executed; the trading
+        loop then halts new entries until an operator checks the exchange.
         """
         ...

@@ -7,6 +7,7 @@ Live trading with real money needs three explicit opt-ins (see ``validate``).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
@@ -121,18 +122,36 @@ class Settings:
         return replace(self, **changes).validate()
 
 
+def _dotenv_value(raw: str) -> str:
+    """Value part of a .env line: quotes removed; unquoted values drop a trailing `` # comment``."""
+    value = raw.strip()
+    if value[:1] in ("'", '"'):
+        end = value.find(value[0], 1)
+        return value[1:end] if end != -1 else value[1:]
+    comment = re.search(r"\s#", value)
+    if comment:
+        value = value[: comment.start()]
+    return value.strip()
+
+
 def load_dotenv(path: str | os.PathLike = ".env") -> dict[str, str]:
-    """Minimal .env reader (KEY=VALUE lines). Real env vars take precedence."""
+    """Minimal .env reader (KEY=VALUE lines, optional ``export``, inline ``# comments``).
+
+    Real env vars take precedence (see ``load_settings``).
+    """
     values: dict[str, str] = {}
     p = Path(path)
     if not p.is_file():
         return values
-    for raw in p.read_text(encoding="utf-8").splitlines():
+    for raw in p.read_text(encoding="utf-8-sig").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip('"').strip("'")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        values[key] = _dotenv_value(value)
     return values
 
 

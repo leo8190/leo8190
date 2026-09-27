@@ -279,6 +279,11 @@ class Journal:
         value = json.loads(rows[0]["value"])
         return value if isinstance(value, dict) else None
 
+    def state_keys(self, prefix: str = "") -> list[str]:
+        """Saved state keys starting with ``prefix``, sorted."""
+        rows = self._query("SELECT key FROM state ORDER BY key")
+        return [row["key"] for row in rows if row["key"].startswith(prefix)]
+
     def recent_decisions(self, limit: int = 20) -> list[dict]:
         """Newest first. ``approved`` is None when no risk verdict was recorded."""
         rows = self._query(

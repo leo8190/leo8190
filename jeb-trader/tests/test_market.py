@@ -270,7 +270,7 @@ def test_csv_malformed_row_reports_line(tmp_path) -> None:
     [
         f"timestamp,open,high,low,close,volume\n{T0},100,99,98,100,1\n",  # high < open
         f"timestamp,open,high,low,close,volume\n{T0},100,101,99\n",  # short row
-        f"timestamp,open,high,low,close,volume\nyesterday,100,101,99,100,1\n",
+        "timestamp,open,high,low,close,volume\nyesterday,100,101,99,100,1\n",
     ],
 )
 def test_csv_rejects_bad_rows(tmp_path, body: str) -> None:
