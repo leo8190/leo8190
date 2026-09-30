@@ -194,6 +194,7 @@ class JevDecisionEngine:
         self._budget_day: int | None = None
         self.spent_today_usd = 0.0
         self.calls = 0
+        self._warned_unconfigured = False
 
     # -- plumbing -------------------------------------------------------------
 
@@ -276,8 +277,10 @@ class JevDecisionEngine:
             logger.warning("Jev API error: %s", exc)
             return self._fallback("api error")
         except ts.TypeSafeError as exc:  # e.g. missing API key when the client is created
-            logger.error("Jev client error: %s", exc)
-            return self._fallback("client not configured")
+            if not self._warned_unconfigured:  # once, not on every candle
+                logger.error("Jev client error: %s", exc)
+                self._warned_unconfigured = True
+            return self._fallback("client not configured", attempted=False)
         latency_ms = (time.perf_counter() - started) * 1000
 
         self.calls += 1

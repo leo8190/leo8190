@@ -6,6 +6,7 @@ import pytest
 
 from jev.brain.claude_engine import ClaudeDecisionEngine, LLMDecision
 from jev.brain.factory import build_engine
+from jev.brain.jev_engine import JevDecisionEngine
 from jev.brain.hybrid import HybridDecisionEngine
 from jev.brain.rules_engine import RulesDecisionEngine
 from jev.config import Settings
@@ -113,7 +114,7 @@ def test_decision_without_llm_call_has_no_cost():
     d = engine.decide(snap(), FLAT)
     assert d.source == "hybrid"
     assert d.model is None and d.cost_usd == 0.0 and d.input_tokens == 0
-    assert "llm: not called" in d.reasoning
+    assert "model: not called" in d.reasoning
 
 
 def test_first_decision_counts_as_heartbeat():
@@ -136,7 +137,7 @@ def test_rules_sell_bypasses_llm():
     assert d.confidence == pytest.approx(0.8)
     assert d.source == "hybrid"
     assert d.cost_usd == 0.0
-    assert d.reasoning.startswith("rules: exit: ema cross | llm: not called")
+    assert d.reasoning.startswith("rules: exit: ema cross | model: not called")
 
 
 def test_rules_buy_confirmed_by_llm():
@@ -150,7 +151,7 @@ def test_rules_buy_confirmed_by_llm():
     assert d.size_pct == pytest.approx(0.4)  # LLM size
     assert d.stop_loss_pct == pytest.approx(1.6)  # tighter of 1.6 / 2.5
     assert d.take_profit_pct == pytest.approx(3.2)  # from the same source as the stop
-    assert "rules: trend entry | llm: BUY" in d.reasoning
+    assert "rules: trend entry | model: BUY" in d.reasoning
     assert_llm_meta(d)
 
 
@@ -306,8 +307,8 @@ def test_factory_rules():
 def test_factory_claude_uses_settings_and_client():
     client = object()
     settings = Settings(
-        engine="claude", model="claude-sonnet-5", llm_timeout_s=3.0, llm_max_retries=0, llm_max_tokens=256,
-        max_llm_cost_usd_per_day=0.5,
+        engine="claude", claude_model="claude-sonnet-5", claude_timeout_s=3.0, ai_max_retries=0,
+        claude_max_tokens=256, max_ai_cost_usd_per_day=0.5,
     )
     engine = build_engine(settings, client=client)
     assert isinstance(engine, ClaudeDecisionEngine)
@@ -316,15 +317,39 @@ def test_factory_claude_uses_settings_and_client():
     assert engine._client is client
 
 
-def test_factory_hybrid(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    engine = build_engine(Settings(engine="hybrid", hybrid_heartbeat_candles=7))
+def test_factory_hybrid_defaults_to_jev_asked_every_candle(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    engine = build_engine(Settings())  # the default engine is hybrid with Jev confirming
     assert isinstance(engine, HybridDecisionEngine)
     assert engine.name == "hybrid"
-    assert engine.heartbeat_candles == 7
+    assert engine.heartbeat_candles == 1  # auto: Jev is fast and nearly free
     assert isinstance(engine.rules, RulesDecisionEngine)
+    assert isinstance(engine.llm, JevDecisionEngine)
+    assert engine.llm.model == "jev-latest"
+
+
+def test_factory_hybrid_with_claude_confirmer(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    engine = build_engine(Settings(engine="hybrid", hybrid_confirmer="claude"))
     assert isinstance(engine.llm, ClaudeDecisionEngine)
     assert engine.llm.model == "claude-haiku-4-5"
+    assert engine.heartbeat_candles == 12  # auto: Claude is slower and pricier
+    assert build_engine(Settings(engine="hybrid", hybrid_heartbeat_candles=7)).heartbeat_candles == 7
+
+
+def test_factory_jev_uses_settings_and_client():
+    client = object()
+    settings = Settings(
+        engine="jev", jev_model="jev-1.13", jev_timeout_s=1.5, ai_max_retries=0,
+        jev_price_per_mtok_input=0.05, max_ai_cost_usd_per_day=0.2, fee_pct=0.1, slippage_pct=0.05,
+    )
+    engine = build_engine(settings, client=client)
+    assert isinstance(engine, JevDecisionEngine)
+    assert (engine.model, engine.timeout_s, engine.max_retries) == ("jev-1.13", 1.5, 0)
+    assert (engine.price_per_mtok_input, engine.daily_budget_usd) == (0.05, 0.2)
+    assert engine.round_trip_cost_pct == pytest.approx(0.3)
+    assert engine.max_position_pct == settings.risk.max_position_pct
+    assert engine._client is client
 
 
 def test_factory_unknown_engine():

@@ -1,6 +1,6 @@
 """Configuration loaded from environment variables (and an optional .env file).
 
-Safety defaults: paper trading, exchange testnet, hybrid engine, tight risk limits.
+Safety defaults: paper trading, exchange testnet, hybrid engine (rules + Jev), tight risk limits.
 Live trading with real money needs three explicit opt-ins (see ``validate``).
 """
 
@@ -14,8 +14,10 @@ from pathlib import Path
 from .models import ConfigError
 
 LIVE_CONFIRM_PHRASE = "YES_I_ACCEPT_REAL_MONEY_RISK"
-DEFAULT_MODEL = "claude-haiku-4-5"
-ENGINES = ("claude", "rules", "hybrid", "jev")
+DEFAULT_JEV_MODEL = "jev-latest"
+DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"
+ENGINES = ("hybrid", "jev", "rules", "claude")
+CONFIRMERS = ("jev", "claude")
 MODES = ("paper", "live")
 _TRUE = {"1", "true", "yes", "y", "on", "si", "sí"}
 _FALSE = {"0", "false", "no", "n", "off"}
@@ -59,12 +61,17 @@ class Settings:
     symbol: str = "BTC/USDT"
     timeframe: str = "5m"
     engine: str = "hybrid"
-    model: str = DEFAULT_MODEL
-    llm_timeout_s: float = 8.0
-    llm_max_retries: int = 1
-    llm_max_tokens: int = 400
-    max_llm_cost_usd_per_day: float = 1.0
-    hybrid_heartbeat_candles: int = 12  # hybrid: ask Claude at least every N candles
+    hybrid_confirmer: str = "jev"  # model that confirms rules entries in hybrid mode
+    # hybrid: consult the model at least every N candles; 0 = auto (1 for Jev, 12 for Claude)
+    hybrid_heartbeat_candles: int = 0
+    jev_model: str = DEFAULT_JEV_MODEL
+    jev_timeout_s: float = 3.0
+    jev_price_per_mtok_input: float = 0.042  # USD; Jev output tokens are free
+    claude_model: str = DEFAULT_CLAUDE_MODEL
+    claude_timeout_s: float = 8.0
+    claude_max_tokens: int = 400
+    ai_max_retries: int = 1
+    max_ai_cost_usd_per_day: float = 1.0  # per engine instance
     history_candles: int = 200
     paper_start_cash: float = 1000.0
     # live: most quote the bot may use (plus its realized PnL); 0 = the whole free balance
@@ -73,6 +80,13 @@ class Settings:
     slippage_pct: float = 0.05
     journal_path: str = "jev_journal.sqlite3"
     risk: RiskConfig = field(default_factory=RiskConfig)
+
+    @property
+    def heartbeat_candles(self) -> int:
+        """Effective hybrid heartbeat: Jev is fast and nearly free, so it can be asked every candle."""
+        if self.hybrid_heartbeat_candles > 0:
+            return self.hybrid_heartbeat_candles
+        return 1 if self.hybrid_confirmer == "jev" else 12
 
     @property
     def is_live(self) -> bool:
@@ -91,6 +105,10 @@ class Settings:
             raise ConfigError(f"JEV_MODE must be one of {MODES}, got {self.mode!r}")
         if self.engine not in ENGINES:
             raise ConfigError(f"JEV_ENGINE must be one of {ENGINES}, got {self.engine!r}")
+        if self.hybrid_confirmer not in CONFIRMERS:
+            raise ConfigError(
+                f"JEV_HYBRID_CONFIRMER must be one of {CONFIRMERS}, got {self.hybrid_confirmer!r}"
+            )
         if "/" not in self.symbol:
             raise ConfigError(f"JEV_SYMBOL must look like BASE/QUOTE, got {self.symbol!r}")
         if self.is_live:
@@ -114,10 +132,13 @@ class Settings:
              "Stops must satisfy 0 < MIN_STOP <= DEFAULT_STOP <= MAX_STOP"),
             (r.default_take_profit_pct > 0, "JEV_DEFAULT_TAKE_PROFIT_PCT must be > 0"),
             (r.min_order_notional > 0, "JEV_MIN_ORDER_NOTIONAL must be > 0"),
-            (self.llm_timeout_s > 0, "JEV_LLM_TIMEOUT_S must be > 0"),
-            (self.llm_max_retries >= 0, "JEV_LLM_MAX_RETRIES must be >= 0"),
-            (self.max_llm_cost_usd_per_day >= 0, "JEV_MAX_LLM_COST_USD_PER_DAY must be >= 0"),
-            (self.hybrid_heartbeat_candles >= 1, "JEV_HYBRID_HEARTBEAT_CANDLES must be >= 1"),
+            (self.jev_timeout_s > 0, "JEV_TIMEOUT_S must be > 0"),
+            (self.jev_price_per_mtok_input >= 0, "JEV_PRICE_PER_MTOK_INPUT must be >= 0"),
+            (self.claude_timeout_s > 0, "JEV_CLAUDE_TIMEOUT_S must be > 0"),
+            (self.claude_max_tokens >= 64, "JEV_CLAUDE_MAX_TOKENS must be >= 64"),
+            (self.ai_max_retries >= 0, "JEV_AI_MAX_RETRIES must be >= 0"),
+            (self.max_ai_cost_usd_per_day >= 0, "JEV_MAX_AI_COST_USD_PER_DAY must be >= 0"),
+            (self.hybrid_heartbeat_candles >= 0, "JEV_HYBRID_HEARTBEAT_CANDLES must be >= 0 (0 = auto)"),
             (self.history_candles >= 60, "JEV_HISTORY_CANDLES must be >= 60"),
             (self.paper_start_cash > 0, "JEV_PAPER_START_CASH must be > 0"),
             (self.live_max_capital >= 0, "JEV_LIVE_MAX_CAPITAL must be >= 0 (0 = whole free balance)"),
@@ -176,12 +197,16 @@ _SETTINGS_ENV = {
     "symbol": "JEV_SYMBOL",
     "timeframe": "JEV_TIMEFRAME",
     "engine": "JEV_ENGINE",
-    "model": "JEV_MODEL",
-    "llm_timeout_s": "JEV_LLM_TIMEOUT_S",
-    "llm_max_retries": "JEV_LLM_MAX_RETRIES",
-    "llm_max_tokens": "JEV_LLM_MAX_TOKENS",
-    "max_llm_cost_usd_per_day": "JEV_MAX_LLM_COST_USD_PER_DAY",
+    "hybrid_confirmer": "JEV_HYBRID_CONFIRMER",
     "hybrid_heartbeat_candles": "JEV_HYBRID_HEARTBEAT_CANDLES",
+    "jev_model": "JEV_MODEL",
+    "jev_timeout_s": "JEV_TIMEOUT_S",
+    "jev_price_per_mtok_input": "JEV_PRICE_PER_MTOK_INPUT",
+    "claude_model": "JEV_CLAUDE_MODEL",
+    "claude_timeout_s": "JEV_CLAUDE_TIMEOUT_S",
+    "claude_max_tokens": "JEV_CLAUDE_MAX_TOKENS",
+    "ai_max_retries": "JEV_AI_MAX_RETRIES",
+    "max_ai_cost_usd_per_day": "JEV_MAX_AI_COST_USD_PER_DAY",
     "history_candles": "JEV_HISTORY_CANDLES",
     "paper_start_cash": "JEV_PAPER_START_CASH",
     "live_max_capital": "JEV_LIVE_MAX_CAPITAL",

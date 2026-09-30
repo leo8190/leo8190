@@ -1,8 +1,8 @@
-"""Hybrid engine: deterministic rules first, Claude only when it matters.
+"""Hybrid engine: deterministic rules first, a model (Jev by default, or Claude) confirms.
 
-- Rules SELL while holding  -> exit immediately (exits never wait for the LLM).
-- Rules BUY while flat      -> Claude must confirm; no confirmation, no entry.
-- Rules HOLD                -> Claude is consulted only on a heartbeat (every N decisions)
+- Rules SELL while holding  -> exit immediately (exits never wait for the model).
+- Rules BUY while flat      -> the model must confirm; no confirmation, no entry.
+- Rules HOLD                -> the model is consulted only on a heartbeat (every N decisions)
                                for an early exit, or an entry the trend filter allows.
 """
 
@@ -137,7 +137,7 @@ class HybridDecisionEngine:
         llm_text = _describe_llm(llm) if llm is not None else "not called"
         update = {
             "source": "hybrid",
-            "reasoning": f"rules: {rules.reasoning} | llm: {llm_text} => {note}",
+            "reasoning": f"rules: {rules.reasoning} | model: {llm_text} => {note}",
             "model": llm.model if llm is not None else None,
             "latency_ms": llm.latency_ms if llm is not None else None,
             "input_tokens": llm.input_tokens if llm is not None else 0,

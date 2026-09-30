@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jev-trader"
 version = "0.1.0"
-description = "Jev Trader: bot de trading de criptomonedas con decisiones rápidas de Claude Haiku 4.5, gestión de riesgo estricta y paper trading por defecto."
+description = "Jev Trader: bot de trading de criptomonedas con decisiones rápidas de Jev (TypeSafe AI), gestión de riesgo estricta y paper trading por defecto."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

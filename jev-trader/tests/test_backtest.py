@@ -315,3 +315,46 @@ def test_daily_loss_kill_switch_works_on_1d_candles():
     result = run_backtest(candles, cfg, Spy({0: buy(stop=15.0, tp=100.0)}), warmup=10)
     assert any("daily_loss" in w for w in result.warnings)
     assert result.trades and result.trades[0].exit_reason == "kill_switch:daily_loss"
+
+
+def test_default_hybrid_engine_trades_when_jev_confirms():
+    """End to end through the real typesafe-sdk client: rules propose, Jev confirms, trades happen."""
+    import json
+
+    import httpx2
+    import typesafe_sdk as ts
+
+    from jev.brain.factory import build_engine
+
+    asked = {"flat": 0, "holding": 0}
+
+    def jev_api(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        if "edge" in body["questions"]:  # flat: agree to enter
+            asked["flat"] += 1
+            answers = {
+                "action": {"type": "choice", "choice": "BUY", "confidence": 0.9,
+                           "probabilities": {"BUY": 0.85, "HOLD": 0.15}},
+                "edge": {"type": "noul", "noul": 0.75},
+                "stop_width": {"type": "choice", "choice": "normal", "confidence": 0.8,
+                               "probabilities": {"tight": 0.1, "normal": 0.8, "wide": 0.1}},
+                "size": {"type": "score", "score": 3.0, "confidence": 0.8,
+                         "legend": {"0": "a", "1": "b", "2": "c", "3": "d"},
+                         "probabilities": {"0": 0.0, "1": 0.0, "2": 0.0, "3": 1.0}},
+            }
+        else:  # holding: keep it, exits come from rules and protective stops
+            asked["holding"] += 1
+            answers = {"action": {"type": "choice", "choice": "HOLD", "confidence": 0.9,
+                                  "probabilities": {"SELL": 0.1, "HOLD": 0.9}}}
+        return httpx2.Response(200, json={"model": "jev-test", "usage": {"input_tokens": 500, "output_tokens": 5},
+                                          "answers": answers})
+
+    client = ts.TypeSafeClient(api_key="test-key", transport=httpx2.MockTransport(jev_api),
+                               retry=ts.RetryPolicy(max_retries=0), timeout=2.0)
+    engine = build_engine(Settings(), client=client)  # default: hybrid, Jev confirms every candle
+    result = run_backtest(synthetic(1500), Settings(), engine, historical_data=False)
+
+    assert asked["flat"] > 0 and asked["holding"] > 0
+    assert result.metrics.num_trades > 0
+    assert result.metrics.llm_calls == asked["flat"] + asked["holding"]
+    assert result.metrics.llm_cost_usd == pytest.approx(result.metrics.llm_calls * 500 * 0.042 / 1e6)

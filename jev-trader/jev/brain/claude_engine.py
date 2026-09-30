@@ -18,7 +18,7 @@ import anthropic
 import pydantic
 from pydantic import BaseModel, Field
 
-from ..config import DEFAULT_MODEL
+from ..config import DEFAULT_CLAUDE_MODEL as DEFAULT_MODEL
 from ..models import Action, Decision, IndicatorSet, MarketSnapshot, PortfolioView
 
 logger = logging.getLogger(__name__)

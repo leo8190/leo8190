@@ -1,8 +1,8 @@
 # Jev Trader
 
-Bot de trading de criptomonedas **spot** que usa **Claude Haiku 4.5** como cerebro de decisión rápida,
-un **motor de reglas determinista** como primera etapa y un **gestor de riesgo estricto que siempre
-tiene la última palabra**. Por defecto opera en **paper trading** (dinero simulado) y, si se activa el
+Bot de trading de criptomonedas **spot** que usa **Jev** (el modelo *System One* de TypeSafe AI) como
+cerebro de decisión rápida, un **motor de reglas determinista** como primera etapa y un **gestor de
+riesgo estricto que siempre tiene la última palabra**. Por defecto opera en **paper trading** (dinero simulado) y, si se activa el
 modo live, en la **testnet** del exchange.
 
 > **Aviso:** Jev Trader es un proyecto educativo y experimental. **No es asesoramiento financiero** ni promete
@@ -15,19 +15,17 @@ modo live, en la **testnet** del exchange.
 
 - **Decide en cada vela cerrada** (por defecto BTC/USDT, 5 minutos) si comprar, vender o esperar.
 - **Cuatro motores de decisión** intercambiables:
+  - `hybrid` (el valor por defecto): las reglas proponen y **Jev confirma**. Sin confirmación no hay
+    entrada; las salidas nunca esperan al modelo.
+  - `jev`: Jev decide solo, en cada vela, con preguntas tipadas sobre el estado del mercado en JSON.
   - `rules`: tendencia con EMA 9/21/50, MACD y RSI. Es determinista, instantáneo y gratis.
-  - `claude`: Claude Haiku 4.5 recibe un snapshot compacto del mercado y responde con *structured
-    outputs*: acción, confianza, tamaño, stop, take-profit y un razonamiento breve.
-  - `hybrid` (el valor por defecto): las reglas filtran y Claude confirma, así que solo se paga el LLM
-    cuando aporta algo.
-  - `jev` (opcional, acceso anticipado): el modelo *System One* de TypeSafe AI responde preguntas
-    tipadas (elección, puntaje, probabilidad) sobre el estado del mercado en una sola pasada. Necesita
-    `TYPESAFE_API_KEY`; sin clave devuelve HOLD.
+  - `claude` (opcional): Claude Haiku 4.5 recibe un snapshot compacto y responde con *structured
+    outputs*. También puede ser el confirmador del híbrido (`JEV_HYBRID_CONFIRMER=claude`).
 - **Gestor de riesgo** con la última palabra:
   - dimensiona cada orden por riesgo fijo (el % de equity que se pierde si salta el stop);
   - aplica posición máxima, confianza mínima, cooldown, límite diario de operaciones y kill switches.
 - **Salidas protectoras** (stop-loss y take-profit) y **kill switches** (pérdida diaria y drawdown) que
-  **no dependen del LLM**.
+  **no dependen de ningún modelo**.
 - **Backtesting sin look-ahead**, con informe HTML autocontenido: equity frente a buy & hold, drawdown y
   operaciones.
 - **Journal SQLite**: guarda cada decisión, orden ejecutada (fill), operación, punto de equity y
@@ -50,10 +48,10 @@ modo live, en la **testnet** del exchange.
   +-----------------------------------------------------------------+
   | TradingEngine.step()  (engine.py; backtest.py reusa las piezas) |
   |                                                                 |
-  |  1. Salidas protectoras: stop / take-profit     <- sin LLM      |
-  |  2. Marca de equity + kill switch (pérdida      <- sin LLM      |
+  |  1. Salidas protectoras: stop / take-profit     <- sin modelo   |
+  |  2. Marca de equity + kill switch (pérdida      <- sin modelo   |
   |     diaria, drawdown) y cierre forzado                          |
-  |  3. Motor de decisión: rules | claude | hybrid | jev            |
+  |  3. Motor de decisión: hybrid (reglas + Jev) | jev | rules | claude |
   |        (si falla o se agota el presupuesto -> HOLD)             |
   |  4. RiskManager: aprueba, achica o rechaza      <- última       |
   |                                                    palabra      |
@@ -94,33 +92,53 @@ modo live, en la **testnet** del exchange.
      confianza mínima.
 7. El broker ejecuta la orden a mercado. El portfolio registra el fill y el journal guarda todo.
 
-## Por qué híbrido: latencia y costo
+## El cerebro: Jev
 
-- Las reglas evalúan cada vela en microsegundos y sin costo.
-- Una llamada a Claude suma la latencia de red y del modelo: `jev decide` la mide, y el timeout por
-  defecto es de 8 s.
-- En modo `hybrid`, Claude se consulta solo en tres casos:
-  - **para confirmar una entrada** cuando las reglas ven un setup. Sin confirmación no se compra, y el
-    stop que se usa es el más ajustado de los dos;
-  - **en un heartbeat** cada `JEV_HYBRID_HEARTBEAT_CANDLES` velas (12 por defecto), para detectar una
-    salida anticipada o una entrada que el filtro de tendencia permita;
-  - **nunca para salir**: si las reglas dicen SELL, se vende sin esperar al LLM. Stops, take-profits y
-    kill switches no pasan por el LLM.
-- Si Claude falla (sin clave, timeout, error de la API, respuesta inválida o presupuesto diario agotado),
-  la decisión es **HOLD**. Un fallo del LLM nunca abre una posición ni bloquea una salida: los reintentos
-  esperan como máximo 1 s (nunca el `Retry-After` completo del servidor) y solo mientras quepan en el
-  timeout.
+[Jev](https://en.wikipedia.org/wiki/Jev_(AI_model)) es el modelo *System One* de
+[TypeSafe AI](https://typesafe.ai), lanzado en septiembre de 2026 (acceso anticipado con lista de espera).
+**No genera texto**: recibe un estado en JSON y responde preguntas tipadas con probabilidades calibradas,
+en una sola pasada (~70-500 ms). Encaja con el trading: una decisión es **una sola llamada** a
+`system_one` con todas las preguntas juntas, que cuesta lo mismo que una sola pregunta.
 
-### Costo estimado por decisión (Claude Haiku 4.5)
+**Estado que recibe** (solo números, nunca texto externo): precio, indicadores (EMAs, RSI, MACD, ATR,
+Bollinger, retornos, volatilidad, volumen relativo), últimos 20 cierres, estado de la posición y el costo
+de ida y vuelta (comisión + slippage).
 
-Precios de Haiku 4.5: **US$1 por millón de tokens de entrada** y **US$5 por millón de salida**.
-Una decisión usa aproximadamente **~700 tokens de entrada** (instrucciones de sistema, snapshot y esquema)
-y **~150 de salida**. Es una estimación, no una medición contra la API:
+**Preguntas por decisión:**
+
+| Situación | Pregunta | Tipo | Se usa para |
+|---|---|---|---|
+| Sin posición | `action`: ¿BUY o HOLD? | Choice | acción; `p(BUY)` |
+| Sin posición | `edge`: ¿un largo toca el take-profit (2× el stop) antes que el stop? | Noul (probabilidad) | confianza = `min(p(BUY), edge)` |
+| Sin posición | `stop_width`: tight / normal / wide | Choice | stop = 1×, 2× o 3× ATR % (acotado a 0,3-10 %); TP = 2× stop |
+| Sin posición | `size`: setup débil … excepcional | Score (0-3) | tamaño = 25-100 % de la posición máxima |
+| Con posición | `action`: ¿SELL o HOLD? | Choice | salida anticipada; confianza = `p(SELL)` |
+
+El gestor de riesgo recibe esa propuesta y **solo puede achicarla o rechazarla**.
+
+### Por qué híbrido por defecto
+
+- Las reglas evalúan cada vela en microsegundos y sin costo, y sirven de filtro de tendencia.
+- En `hybrid`, Jev **confirma cada entrada** que proponen las reglas: sin confirmación no se compra, y se
+  usa el stop más ajustado de los dos.
+- Como Jev es rápido y casi gratis, el heartbeat automático lo consulta **en cada vela**: puede sugerir una
+  salida anticipada o una entrada si el filtro de tendencia no es bajista. Con Claude como confirmador
+  (`JEV_HYBRID_CONFIRMER=claude`) el heartbeat pasa a 12 velas.
+- **Salir nunca espera al modelo**: si las reglas dicen SELL se vende; stops, take-profits y kill switches
+  no pasan por ningún modelo.
+- Si el modelo falla (sin clave, timeout, rate limit, respuesta inválida o presupuesto agotado), la
+  decisión es **HOLD**. Los reintentos son acotados (espera máxima 1 s, sin respetar un `Retry-After`
+  largo), así que una decisión nunca frena el bucle. Timeout por defecto: 3 s para Jev, 8 s para Claude.
+
+### Costo por decisión
+
+Jev cobra **~US$0,042 por millón de tokens de entrada**; la salida es gratis. Medido con `build_state`
+sobre datos sintéticos: una consulta sin posición (estado + 4 preguntas) ronda **~630 tokens** y una con
+posición (1 pregunta) **~330**:
 
 ```
-entrada: 700 × 1 / 1.000.000 = US$0,00070
-salida : 150 × 5 / 1.000.000 = US$0,00075
-total  ≈ US$0,0015 por decisión
+sin posición: 630 × 0,042 / 1.000.000 ≈ US$0,000026
+con posición: 330 × 0,042 / 1.000.000 ≈ US$0,000014
 ```
 
 Con velas de 5 minutos hay 288 velas por día:
@@ -128,17 +146,15 @@ Con velas de 5 minutos hay 288 velas por día:
 | Modo | Llamadas/día | Costo/día aprox. |
 |---|---|---|
 | `rules` | 0 | US$0 |
-| `hybrid` | mínimo 24 (heartbeats) más 1 por cada vela con setup de las reglas | ~US$0,035 como mínimo; peor caso US$0,43 |
-| `claude` | 288 (una por vela) | ~US$0,43 (~US$13/mes) |
+| `hybrid` / `jev` | hasta 288 (una por vela) | **< US$0,01** (~US$0,2/mes) |
+| `claude` (Haiku 4.5, US$1 / US$5 por millón) | 288 | ~US$0,43 (~US$13/mes) |
 
-Referencia para `hybrid`: en el backtest sintético de 3000 velas descripto más abajo, las reglas
-propusieron BUY en ~13 % de las decisiones. Eso daría del orden de 60 llamadas por día (~US$0,09 por día). Es
-una referencia sintética, no una predicción.
+Los precios pueden cambiar: ajustalos con `JEV_PRICE_PER_MTOK_INPUT`. `JEV_MAX_AI_COST_USD_PER_DAY`
+(US$1 por defecto) corta las llamadas al alcanzar el tope diario y el bot sigue con HOLD. En backtests con
+un modelo, `jev backtest` estima el costo antes de empezar y pide `--yes` si el peor caso supera US$1;
+`--max-ai-calls` (200 por defecto) pasa al motor de reglas al llegar al tope.
 
-`JEV_MAX_LLM_COST_USD_PER_DAY` (US$1 por defecto) corta las llamadas al alcanzar el tope diario, y Jev Trader
-sigue con HOLD. En backtests con LLM, `jev backtest` estima el costo antes de empezar y pide `--yes` si el
-peor caso supera US$1. `--max-llm-calls` (200 por defecto) pasa al motor de reglas cuando se alcanza el
-tope.
+> Jev Trader es un proyecto independiente: **no está afiliado** con TypeSafe AI ni con Anthropic.
 
 ## Inicio rápido
 
@@ -155,7 +171,8 @@ jev backtest --source synthetic --engine rules
 #    -> imprime el resumen y escribe reports/backtest.html
 
 # 2) Una decisión rápida de demostración (no envía órdenes)
-jev decide --synthetic                    # usa el motor de JEV_ENGINE
+jev decide --synthetic                    # híbrido: reglas + Jev (sin clave, Jev responde HOLD)
+jev decide --synthetic --engine jev       # solo Jev
 jev decide --synthetic --engine rules
 
 # 3) Paper trading
@@ -166,8 +183,9 @@ jev paper                                                          # precios rea
 jev status
 ```
 
-Para usar Claude, poné `ANTHROPIC_API_KEY` en `.env` o en el entorno. Sin clave, Jev Trader funciona igual: cada
-consulta al LLM devuelve HOLD y la CLI lo avisa.
+Para usar Jev, pedí acceso en [typesafe.ai](https://typesafe.ai) y poné `TYPESAFE_API_KEY` en `.env`.
+Para Claude (opcional), `ANTHROPIC_API_KEY`. Sin clave el bot funciona igual: cada consulta al modelo
+devuelve HOLD y la CLI lo avisa.
 
 ### Testnet de Binance (modo live sin dinero real)
 
@@ -225,10 +243,10 @@ testnet) no las gestiona ni les pone stop, y `jev live` lo avisa al arrancar.
     reiniciar no lo borra.
 - **Cooldown** tras cada salida (`JEV_COOLDOWN_CANDLES`), **límite diario de operaciones** y **posición
   máxima** (`JEV_MAX_POSITION_PCT`).
-- **El LLM solo puede achicar**: su `size_pct` es un tope adicional. Nunca supera el tamaño que calcula el
+- **El modelo solo puede achicar**: su `size_pct` es un tope adicional. Nunca supera el tamaño que calcula el
   riesgo, y los stops se recortan a `[JEV_MIN_STOP_PCT, JEV_MAX_STOP_PCT]`.
-- **Salidas protectoras sin LLM**: stop-loss y take-profit se evalúan antes de consultar a cualquier motor.
-- **Fallo del LLM = HOLD**, con presupuesto diario en USD.
+- **Salidas protectoras sin modelo**: stop-loss y take-profit se evalúan antes de consultar a cualquier motor.
+- **Fallo del modelo = HOLD**, con presupuesto diario en USD.
 - **Estado incierto de una orden**: si el exchange no confirma si una orden se ejecutó, o el proceso se cortó
   mientras la enviaba, Jev Trader bloquea nuevas entradas y lo registra para que una persona lo revise
   (`jev status --reset-halt` lo libera).
@@ -248,12 +266,14 @@ de configuración, nunca un `false` silencioso.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | (vacía) | Clave de la API de Anthropic. Sin clave, el LLM responde HOLD |
-| `JEV_MODEL` | `claude-haiku-4-5` | Modelo de Claude |
-| `JEV_ENGINE` | `hybrid` | `hybrid`, `claude`, `rules` o `jev` |
-| `TYPESAFE_API_KEY` | (vacía) | Clave de TypeSafe AI para el motor `jev`. Sin clave, Jev responde HOLD |
-| `JEV_LLM_TIMEOUT_S` | `8` | Timeout por llamada al LLM, en segundos |
-| `JEV_MAX_LLM_COST_USD_PER_DAY` | `1.0` | Presupuesto diario del LLM (0 lo desactiva) |
+| `TYPESAFE_API_KEY` | (vacía) | Clave de TypeSafe AI para Jev. Sin clave, Jev responde HOLD |
+| `JEV_ENGINE` | `hybrid` | `hybrid`, `jev`, `rules` o `claude` |
+| `JEV_HYBRID_CONFIRMER` | `jev` | Modelo que confirma las entradas del híbrido: `jev` o `claude` |
+| `JEV_MODEL` | `jev-latest` | Modelo de Jev |
+| `JEV_TIMEOUT_S` | `3` | Timeout por llamada a Jev, en segundos |
+| `JEV_MAX_AI_COST_USD_PER_DAY` | `1.0` | Presupuesto diario por motor de IA (0 lo desactiva) |
+| `ANTHROPIC_API_KEY` | (vacía) | Clave de Anthropic, solo para el motor `claude` |
+| `JEV_CLAUDE_MODEL` | `claude-haiku-4-5` | Modelo de Claude |
 | `JEV_EXCHANGE` | `binance` | Id del exchange en ccxt |
 | `JEV_SYMBOL` | `BTC/USDT` | Par spot `BASE/QUOTE` |
 | `JEV_TIMEFRAME` | `5m` | Timeframe de las velas (`1m`, `5m`, `1h`, `1d`…) |
@@ -281,9 +301,11 @@ Variables avanzadas, opcionales:
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `JEV_LLM_MAX_RETRIES` | `1` | Reintentos rápidos del LLM (espera ≤1 s, dentro del timeout) |
-| `JEV_LLM_MAX_TOKENS` | `400` | Tope de tokens de salida por decisión |
-| `JEV_HYBRID_HEARTBEAT_CANDLES` | `12` | Cada cuántas velas el modo híbrido consulta a Claude sin setup |
+| `JEV_AI_MAX_RETRIES` | `1` | Reintentos rápidos del modelo (espera ≤1 s, dentro del timeout) |
+| `JEV_PRICE_PER_MTOK_INPUT` | `0.042` | Precio de Jev en US$ por millón de tokens de entrada (para el presupuesto) |
+| `JEV_HYBRID_HEARTBEAT_CANDLES` | `0` (auto) | Cada cuántas velas el híbrido consulta al modelo sin setup; auto = 1 con Jev, 12 con Claude |
+| `JEV_CLAUDE_TIMEOUT_S` | `8` | Timeout por llamada a Claude, en segundos |
+| `JEV_CLAUDE_MAX_TOKENS` | `400` | Tope de tokens de salida de Claude por decisión |
 | `JEV_HISTORY_CANDLES` | `200` | Velas de historia por decisión (mínimo 60) |
 | `JEV_JOURNAL_PATH` | `jev_journal.sqlite3` | Archivo SQLite del journal |
 | `JEV_MIN_STOP_PCT` / `JEV_MAX_STOP_PCT` | `0.3` / `10` | Límites del stop aceptado por el riesgo |
@@ -292,7 +314,7 @@ Variables avanzadas, opcionales:
 
 | Comando | Qué hace |
 |---|---|
-| `jev backtest [--source synthetic\|csv\|exchange] [--csv RUTA] [--candles N] [--seed S] [--engine E] [--max-llm-calls N] [--warmup N] [--report RUTA] [--journal RUTA] [--yes]` | Backtest sin look-ahead. Imprime el resumen y escribe el informe HTML (`reports/backtest.html` por defecto) |
+| `jev backtest [--source synthetic\|csv\|exchange] [--csv RUTA] [--candles N] [--seed S] [--engine E] [--max-ai-calls N] [--warmup N] [--report RUTA] [--journal RUTA] [--yes]` | Backtest sin look-ahead. Imprime el resumen y escribe el informe HTML (`reports/backtest.html` por defecto) |
 | `jev decide [--synthetic] [--engine E]` | Una decisión de demostración: snapshot, decisión, latencia y costo. **No envía órdenes** |
 | `jev paper [--synthetic] [--fast] [--max-iterations N] [--journal RUTA] [--fresh]` | Paper trading en tiempo real: espera cada cierre de vela más 2 s. `--synthetic --fast` simula sin esperas |
 | `jev live [--max-iterations N] [--yes]` | Órdenes reales por ccxt (testnet por defecto). Requiere `JEV_MODE=live` |
@@ -328,9 +350,9 @@ Cómo funcionan `paper` y `live`:
 - El backtest usa los mismos `RiskManager`, `Portfolio` y `PaperBroker` que el modo en vivo.
 - El informe advierte cuando corresponde:
   - datos sintéticos;
-  - **contaminación** si se usa un LLM sobre datos históricos, porque el modelo pudo haber visto ese
-    período;
-  - llamadas al LLM que fallaron;
+  - **contaminación** si se usa un modelo (Jev o Claude) sobre datos históricos, porque pudo haber visto
+    ese período durante el entrenamiento;
+  - llamadas al modelo que fallaron;
   - posición abierta al final;
   - muestra demasiado chica.
 
@@ -365,14 +387,14 @@ pequeña.
 ```
 
 La suite (~640 tests) corre **offline** en pocos segundos. Usa fakes para el exchange, el broker y los
-clientes de Anthropic y TypeSafe, y no hace ninguna llamada de red.
+clientes de TypeSafe (Jev) y Anthropic, y no hace ninguna llamada de red.
 
 ## Limitaciones (honestas)
 
 - **No hay garantía de ganancias.** La estrategia de reglas incluida es una base simple y perdió dinero en
   el backtest sintético.
 - **Comisiones y slippage** (~0,1 % + 0,05 % por lado por defecto) hacen inviables los movimientos chicos.
-- **Los backtests de LLMs sobre datos pasados están contaminados**: el modelo pudo haber visto ese
+- **Los backtests con modelos (Jev o Claude) sobre datos pasados están contaminados**: el modelo pudo haber visto ese
   período durante el entrenamiento, así que el resultado sobreestima el rendimiento real. La evaluación
   honesta es paper trading hacia adelante.
 - **Los datos sintéticos no son el mercado real.**
@@ -388,15 +410,16 @@ clientes de Anthropic y TypeSafe, y no hace ninguna llamada de red.
 - **Un solo símbolo, spot, solo largo**, sin pyramiding.
 - `paper`, `decide` y `download` leen datos públicos del exchange real. `live` usa el mismo exchange
   (testnet o mainnet) para datos y órdenes.
-- El presupuesto diario del LLM se lleva en memoria y se reinicia al reiniciar el proceso.
-- Los tests no ejercitan la API real de Anthropic ni la de los exchanges (todo es offline). Probá en
-  testnet antes de cualquier otra cosa.
+- El presupuesto diario de IA se lleva en memoria y se reinicia al reiniciar el proceso.
+- Jev está en acceso anticipado: su precio, su latencia y sus respuestas pueden cambiar.
+- Los tests no ejercitan las APIs reales de TypeSafe, Anthropic ni los exchanges (todo es offline, con el
+  SDK real de Jev contra un transporte simulado). Probá en testnet antes de cualquier otra cosa.
 
 ## Roadmap
 
 - Órdenes stop/OCO en el exchange para el modo live, para que la protección no dependa del cierre de vela.
 - Evaluación *walk-forward* y validación de parámetros fuera de muestra.
-- Paper trading prolongado con el LLM sobre datos posteriores a su fecha de corte, para medir sin
+- Paper trading prolongado con Jev sobre datos posteriores a su entrenamiento, para medir sin
   contaminación.
 - Varios símbolos y un límite de riesgo a nivel cartera.
 - Alertas (email o Telegram) cuando salta un kill switch o una orden queda en estado incierto.

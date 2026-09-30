@@ -45,16 +45,30 @@ def test_backtest_llm_cost_guard_requires_yes(tmp_path, capsys):
                  "--report", str(report)])
     captured = capsys.readouterr()
     assert code == 2 and not report.exists()
-    assert "Coste LLM estimado" in captured.out and "--yes" in captured.err
+    assert "Coste IA estimado" in captured.out and "--yes" in captured.err
 
 
-def test_backtest_hybrid_without_key_degrades_to_hold(tmp_path, capsys):
+def test_backtest_hybrid_without_key_degrades_to_hold(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     report = tmp_path / "h.html"
-    code = main(["backtest", "--engine", "hybrid", "--candles", "150", "--max-llm-calls", "3", "--report", str(report)])
+    code = main(["backtest", "--engine", "hybrid", "--candles", "150", "--max-ai-calls", "3", "--report", str(report)])
     captured = capsys.readouterr()
     assert code == 0 and report.is_file()
+    assert "TYPESAFE_API_KEY" in captured.err and "Traceback" not in captured.err
+    assert "Jev" in captured.out  # the cost estimate names the model
+    # no key means no request is ever sent, so nothing counts toward the call cap
+    assert "Límite de 3 llamadas" not in captured.out
+
+
+def test_backtest_hybrid_with_claude_confirmer_warns_about_anthropic_key(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("JEV_HYBRID_CONFIRMER", "claude")
+    code = main(["backtest", "--engine", "hybrid", "--candles", "150", "--max-llm-calls", "2",
+                 "--report", str(tmp_path / "c.html")])
+    captured = capsys.readouterr()
+    assert code == 0
     assert "ANTHROPIC_API_KEY" in captured.err and "Traceback" not in captured.err
-    assert "Límite de 3 llamadas" in captured.out
 
 
 def test_backtest_csv_needs_a_path(capsys):

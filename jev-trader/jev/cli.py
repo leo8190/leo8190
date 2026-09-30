@@ -175,8 +175,22 @@ def _flat_view(settings: Settings) -> PortfolioView:
     )
 
 
+def _ai_model(settings: Settings) -> str | None:
+    """Which model the engine consults: "jev", "claude" or None (rules only)."""
+    if settings.engine == "hybrid":
+        return settings.hybrid_confirmer
+    return settings.engine if settings.engine in ("jev", "claude") else None
+
+
+def _ai_model_label(settings: Settings) -> str:
+    if _ai_model(settings) == "jev":
+        return f"{settings.jev_model} (Jev · TypeSafe AI)"
+    return settings.claude_model
+
+
 def _warn_missing_llm_key(settings: Settings) -> None:
-    if settings.engine == "jev":
+    model = _ai_model(settings)
+    if model == "jev":
         if not os.environ.get("TYPESAFE_API_KEY"):
             print(
                 "Aviso: TYPESAFE_API_KEY no está configurada; cada consulta a Jev devolverá HOLD "
@@ -184,7 +198,7 @@ def _warn_missing_llm_key(settings: Settings) -> None:
                 file=sys.stderr,
             )
         return
-    if settings.engine != "rules" and not _has_anthropic_credentials():
+    if model == "claude" and not _has_anthropic_credentials():
         print(
             "Aviso: ANTHROPIC_API_KEY no está configurada; cada consulta a Claude devolverá HOLD "
             "(fallback seguro). Usá --engine rules o configurá la clave en .env.",
@@ -260,26 +274,26 @@ def _backtest_candles(args: argparse.Namespace, settings: Settings) -> tuple[lis
 
 
 def _llm_cost_per_call(settings: Settings, candles: Sequence[Candle]) -> tuple[float, float]:
-    """(typical, worst case) USD per LLM call, from a real prompt of this data set."""
+    """(typical, worst case) USD per model call, from a real prompt of this data set."""
     from .features import build_snapshot
 
     snapshot = build_snapshot(settings.symbol, settings.timeframe, candles[: settings.history_candles])
-    if settings.engine == "jev":
+    if _ai_model(settings) == "jev":
         import json
 
-        from .brain.jev_engine import DEFAULT_PRICE_PER_MTOK_INPUT, build_state
+        from .brain.jev_engine import build_state
 
         state = build_state(snapshot, _flat_view(settings), 2.0 * (settings.fee_pct + settings.slippage_pct))
         in_tokens = len(json.dumps(state)) / CHARS_PER_TOKEN + JEV_QUESTIONS_TOKENS
-        cost = in_tokens * DEFAULT_PRICE_PER_MTOK_INPUT / 1_000_000  # Jev output tokens are free
+        cost = in_tokens * settings.jev_price_per_mtok_input / 1_000_000  # Jev output tokens are free
         return cost, cost
     from .brain.claude_engine import SYSTEM_PROMPT, format_prompt, price_for
 
     prompt = format_prompt(snapshot, _flat_view(settings))
     in_tokens = (len(SYSTEM_PROMPT) + len(prompt)) / CHARS_PER_TOKEN + SCHEMA_OVERHEAD_TOKENS
-    in_price, out_price = price_for(settings.model)
+    in_price, out_price = price_for(settings.claude_model)
     typical = (in_tokens * in_price + TYPICAL_OUTPUT_TOKENS * out_price) / 1_000_000
-    worst = (in_tokens * in_price + settings.llm_max_tokens * out_price) / 1_000_000
+    worst = (in_tokens * in_price + settings.claude_max_tokens * out_price) / 1_000_000
     return typical, worst
 
 
@@ -295,10 +309,11 @@ def _settings_summary(
         "Warm-up (velas)": str(warmup),
         "Motor": settings.engine,
     }
-    if settings.engine != "rules":
-        summary["Modelo"] = "jev-latest (TypeSafe)" if settings.engine == "jev" else settings.model
-        summary["Máx. llamadas LLM"] = str(max_llm_calls)
-        summary["Heartbeat híbrido (velas)"] = str(settings.hybrid_heartbeat_candles)
+    if _ai_model(settings):
+        summary["Modelo"] = _ai_model_label(settings)
+        summary["Máx. llamadas IA"] = str(max_llm_calls)
+    if settings.engine == "hybrid":
+        summary["Heartbeat híbrido (velas)"] = str(settings.heartbeat_candles)
     summary.update({
         "Capital inicial": _fmt(settings.paper_start_cash),
         "Comisión por lado": f"{_fmt(settings.fee_pct, 3)} %",
@@ -326,7 +341,7 @@ def cmd_backtest(args: argparse.Namespace, settings: Settings) -> int:
     candles, source, historical = _backtest_candles(args, settings)
     if len(candles) < args.warmup + 1:
         raise UsageError(f"hacen falta al menos {args.warmup + 1} velas (warm-up {args.warmup}), hay {len(candles)}")
-    uses_llm = settings.engine != "rules"
+    uses_llm = _ai_model(settings) is not None
     max_calls = args.max_llm_calls
     if uses_llm and max_calls is None:
         max_calls = DEFAULT_MAX_LLM_CALLS
@@ -335,13 +350,13 @@ def cmd_backtest(args: argparse.Namespace, settings: Settings) -> int:
     if uses_llm:
         typical, worst = _llm_cost_per_call(settings, candles)
         calls = min(max_calls or 0, len(candles) - args.warmup)
-        model = "jev-latest" if settings.engine == "jev" else settings.model
-        print(f"Coste LLM estimado ({model}): hasta {calls} llamadas · típico ~US${typical * calls:.2f}, "
-              f"peor caso ~US${worst * calls:.2f} (US${typical:.4f}-{worst:.4f} por llamada). "
-              f"El presupuesto diario (US${settings.max_llm_cost_usd_per_day:.2f}) también limita el gasto real.")
+        print(f"Coste IA estimado ({_ai_model_label(settings)}): hasta {calls} llamadas · "
+              f"típico ~US${typical * calls:.4f}, peor caso ~US${worst * calls:.4f} "
+              f"(US${typical:.6f}-{worst:.6f} por llamada). "
+              f"El presupuesto diario (US${settings.max_ai_cost_usd_per_day:.2f}) también limita el gasto real.")
         if worst * calls > LLM_COST_CONFIRM_USD and not args.yes:
             print(f"El peor caso supera US${LLM_COST_CONFIRM_USD:.2f}: repetí con --yes para confirmar, "
-                  "o bajá --max-llm-calls / --candles.", file=sys.stderr)
+                  "o bajá --max-ai-calls / --candles.", file=sys.stderr)
             return EXIT_CONFIG
         _warn_missing_llm_key(settings)
 
@@ -411,7 +426,7 @@ def _print_decision(decision: Decision, elapsed_ms: float) -> None:
           f"tamaño {_fmt(decision.size_pct)} · fuente {decision.source}")
     print(f"Stop / TP    {stop} / {tp}")
     print(f"Razonamiento {decision.reasoning or '-'}")
-    llm = f" (LLM {_fmt(decision.latency_ms, 0)} ms)" if decision.latency_ms is not None else ""
+    llm = f" (modelo {_fmt(decision.latency_ms, 0)} ms)" if decision.latency_ms is not None else ""
     print(f"Latencia     {_fmt(elapsed_ms, 1)} ms total{llm}")
     model = f" · {decision.model}" if decision.model else ""
     print(f"Coste        US${decision.cost_usd:.5f} · tokens {decision.input_tokens} in / "
@@ -526,7 +541,7 @@ def _print_session_end(engine: Any, totals: dict[str, float]) -> None:
     position = f"{p.qty:.8g} {p.base_currency} @ {_fmt_price(p.avg_entry_price)}" if p.in_position else "sin posición"
     print(f"\nFin de la sesión: {int(totals['steps'])} pasos · efectivo {cash} · {position} · "
           f"operaciones cerradas {len(p.trades)} · PnL realizado {_fmt(p.realized_pnl, 2, signed=True)} · "
-          f"coste LLM de la sesión US${totals['llm_cost']:.4f}")
+          f"coste IA de la sesión US${totals['llm_cost']:.4f}")
     if p.halted_reason:
         print(f"Trading detenido por kill switch: {p.halted_reason} (ver `jev status --reset-halt`).")
 
@@ -750,7 +765,7 @@ def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
         if s["sources"]:
             print("Fuentes      " + " · ".join(f"{k} {v}" for k, v in s["sources"].items()))
         latency = f" · latencia media {_fmt(s['avg_latency_ms'], 0)} ms" if s["avg_latency_ms"] is not None else ""
-        print(f"LLM          {s['llm_calls']} llamadas · US${s['llm_cost_usd']:.4f}{latency}")
+        print(f"IA           {s['llm_calls']} llamadas · US${s['llm_cost_usd']:.4f}{latency}")
         print(f"Fills        {s['fills']} · comisiones {_fmt(s['fees_paid'], 4)}")
         print(f"Operaciones  {s['trades']} (ganadoras {s['winning_trades']}) · PnL realizado "
               f"{_fmt(s['realized_pnl'], 2, signed=True)}")
@@ -789,15 +804,16 @@ def _common(parser: argparse.ArgumentParser, *, market: bool = True, engine: boo
         parser.add_argument("--symbol", help="par BASE/QUOTE (por defecto JEV_SYMBOL)")
         parser.add_argument("--timeframe", help="p. ej. 1m, 5m, 1h (por defecto JEV_TIMEFRAME)")
     if engine:
-        parser.add_argument("--engine", choices=("rules", "hybrid", "claude", "jev"),
-                            help="motor (por defecto JEV_ENGINE)")
+        parser.add_argument("--engine", choices=("hybrid", "jev", "rules", "claude"),
+                            help="motor (por defecto JEV_ENGINE: hybrid = reglas + confirmación de Jev)")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="jev",
-        description="Jev Trader: trading de cripto spot con Claude Haiku 4.5 como cerebro rápido, reglas "
-                    "deterministas y un gestor de riesgo con la última palabra. Paper trading por defecto.",
+        description="Jev Trader: trading de cripto spot con Jev (TypeSafe AI) como cerebro de decisiones "
+                    "rápidas, reglas deterministas y un gestor de riesgo con la última palabra. Claude es un "
+                    "motor opcional. Paper trading por defecto.",
     )
     parser.add_argument("-v", "--verbose", action="count", default=0, help="más logs (-v INFO, -vv DEBUG)")
     parser.add_argument("--env-file", default=".env", help="archivo .env (por defecto ./.env)")
@@ -810,11 +826,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--candles", type=_positive_int, help=f"número de velas (por defecto {DEFAULT_CANDLES}; CSV: todas)")
     p.add_argument("--seed", type=int, default=42, help="semilla del mercado sintético")
     p.add_argument("--warmup", type=_positive_int, default=DEFAULT_WARMUP, help="velas de historia antes de decidir")
-    p.add_argument("--max-llm-calls", type=_non_negative_int,
-                   help=f"tope de llamadas al LLM; luego sigue con reglas (por defecto {DEFAULT_MAX_LLM_CALLS})")
+    p.add_argument("--max-ai-calls", "--max-llm-calls", dest="max_llm_calls", type=_non_negative_int,
+                   help=f"tope de llamadas al modelo (Jev/Claude); luego sigue con reglas "
+                        f"(por defecto {DEFAULT_MAX_LLM_CALLS})")
     p.add_argument("--report", default=DEFAULT_REPORT, help=f"ruta del informe HTML (por defecto {DEFAULT_REPORT})")
     p.add_argument("--journal", help="registrar el backtest en este journal SQLite (opcional)")
-    p.add_argument("--yes", action="store_true", help="aceptar un coste LLM estimado > US$1")
+    p.add_argument("--yes", action="store_true", help="aceptar un coste de IA estimado > US$1")
     p.set_defaults(handler=cmd_backtest, journal_overrides_settings=False)
 
     p = sub.add_parser("decide", help="una decisión rápida de demostración (no envía órdenes)")
