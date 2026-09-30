@@ -21,6 +21,8 @@ from .timeframes import closed_candles, dedupe_candles, make_candle, timeframe_t
 
 logger = logging.getLogger(__name__)
 
+CLOCK_SYNC_INTERVAL_MS = 3_600_000
+
 
 def _system_now_ms() -> int:
     return int(time.time() * 1000)
@@ -47,6 +49,8 @@ class CcxtMarket:
         self.use_testnet = use_testnet
         self._secrets = tuple(s for s in (api_key, api_secret) if s)
         self._now_ms = now_ms or _system_now_ms
+        self._clock_offset_ms = 0  # exchange time - local time
+        self._clock_checked_at: int | None = None
         if exchange is None:
             exchange = self._create_exchange(api_key, api_secret)
         self.exchange: Any = exchange
@@ -64,7 +68,35 @@ class CcxtMarket:
         self._require("fetchOHLCV")
         rows = self._call("fetch_ohlcv", symbol, symbol, timeframe, limit=limit + 1)
         candles = dedupe_candles(self._to_candles(rows, symbol))
-        return closed_candles(candles, timeframe, self._now_ms())[-limit:]
+        return closed_candles(candles, timeframe, self._exchange_now_ms())[-limit:]
+
+    def _exchange_now_ms(self) -> int:
+        """Local clock corrected by the exchange's server time (re-synced hourly).
+
+        The closed-candle filter must not trust a local clock that runs ahead: it would
+        take the candle still forming on the exchange for a closed one.
+        """
+        local = self._now_ms()
+        if self._clock_checked_at is None or local - self._clock_checked_at >= CLOCK_SYNC_INTERVAL_MS:
+            self._clock_checked_at = local
+            self._clock_offset_ms = self._measure_clock_offset(local)
+        return local + self._clock_offset_ms
+
+    def _measure_clock_offset(self, before: int) -> int:
+        has = getattr(self.exchange, "has", None)
+        fetch_time = getattr(self.exchange, "fetch_time", None)
+        if not callable(fetch_time) or (isinstance(has, dict) and not has.get("fetchTime")):
+            return self._clock_offset_ms
+        try:
+            server = int(fetch_time())
+        except Exception as exc:  # optional: keep the last known offset
+            logger.debug("%s fetch_time failed: %s", self.exchange_id, type(exc).__name__)
+            return self._clock_offset_ms
+        offset = server - (before + self._now_ms()) // 2
+        if abs(offset) > 1000:
+            logger.warning("local clock is %+.1f s off %s time: using the exchange time for closed candles",
+                           -offset / 1000, self.exchange_id)
+        return offset
 
     def fetch_last_price(self, symbol: str) -> float:
         """Last traded price from the ticker ("last", then "close", then bid/ask mid)."""

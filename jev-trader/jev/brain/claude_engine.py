@@ -26,12 +26,27 @@ logger = logging.getLogger(__name__)
 # USD per 1M tokens: (input, output). Cache writes cost 1.25x input, cache reads 0.1x input.
 PRICING: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.0, 5.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-opus-4-6": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-5": (5.0, 25.0),
     "claude-opus-5-5": (4.0, 20.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-mythos-5-1": (10.0, 50.0),
 }
+# Unknown models are budgeted at a price above every entry of the table, so the daily
+# budget can only over-count, never under-count, until the model is added above.
+UNKNOWN_MODEL_PRICE: tuple[float, float] = (15.0, 75.0)
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.1
+# Retries are done here, not by the SDK: the SDK would sleep for any server Retry-After
+# (up to hours) inside decide(), blocking the trading loop and its stop checks.
+MAX_RETRY_SLEEP_S = 1.0
+_RETRY_STATUS = frozenset({408, 409, 429})
 
 MS_PER_DAY = 86_400_000
 MAX_REASONING_CHARS = 300
@@ -217,13 +232,39 @@ def format_prompt(snapshot: MarketSnapshot, portfolio: PortfolioView) -> str:
 
 def price_for(model: str) -> tuple[float, float]:
     """(input, output) USD per 1M tokens. Dated snapshots match their base id by prefix;
-    unknown models use the most expensive entry so budgeting stays conservative."""
+    unknown models use ``UNKNOWN_MODEL_PRICE`` (above every known price, with a warning)
+    so budgeting stays conservative."""
     if model in PRICING:
         return PRICING[model]
     prefixes = [key for key in PRICING if model.startswith(key + "-")]
     if prefixes:
         return PRICING[max(prefixes, key=len)]
-    return max(PRICING.values())
+    if model not in _WARNED_UNKNOWN:
+        _WARNED_UNKNOWN.add(model)
+        logger.warning("unknown model %r: budgeting it at US$%g/US$%g per 1M tokens (in/out)", model,
+                       *UNKNOWN_MODEL_PRICE)
+    return max(UNKNOWN_MODEL_PRICE, *PRICING.values())
+
+
+_WARNED_UNKNOWN: set[str] = set()
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, anthropic.APIConnectionError):  # includes APITimeoutError
+        return True
+    status = getattr(exc, "status_code", None)
+    return isinstance(exc, anthropic.APIStatusError) and isinstance(status, int) and (
+        status in _RETRY_STATUS or status >= 500
+    )
+
+
+def _retry_after_s(exc: BaseException) -> float | None:
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    try:
+        value = headers.get("retry-after") if headers is not None else None
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _usage_int(usage: Any, name: str) -> int:
@@ -245,10 +286,12 @@ class ClaudeDecisionEngine:
         daily_budget_usd: float = 1.0,
         client: Any = None,
         clock_ms: Callable[[], int] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.model = model
         self.timeout_s = timeout_s
         self.max_retries = max_retries
+        self._sleep = sleep or time.sleep
         self.max_tokens = max_tokens
         self.daily_budget_usd = daily_budget_usd
         self._client = client  # created lazily so construction never needs an API key
@@ -297,19 +340,35 @@ class ClaudeDecisionEngine:
             return self._failure("unexpected error", exc)
 
     def _request(self, prompt: str) -> tuple[Any, float]:
-        """One API call; returns (response, latency_ms). Exceptions propagate to ``_call``."""
+        """API call with at most ``max_retries`` quick retries; returns (response, latency_ms).
+
+        Retryable failures (connection, timeout, 408/409/429, 5xx) are retried after at most
+        MAX_RETRY_SLEEP_S (a server Retry-After is capped, never honoured in full) and only
+        while the whole call stays within ``timeout_s``. The last exception propagates to ``_call``.
+        """
         client = self._get_client()
-        self.calls += 1
         started = time.perf_counter()
-        # No cache_control: Haiku 4.5 only caches prefixes >= 4096 tokens and SYSTEM_PROMPT is far shorter.
-        response = client.messages.parse(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-            output_format=LLMDecision,
-        )
-        return response, (time.perf_counter() - started) * 1000.0
+        attempt = 0
+        while True:
+            self.calls += 1
+            try:
+                # No cache_control: Haiku 4.5 only caches prefixes >= 4096 tokens and SYSTEM_PROMPT is far shorter.
+                response = client.messages.parse(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                    output_format=LLMDecision,
+                )
+                return response, (time.perf_counter() - started) * 1000.0
+            except Exception as exc:
+                delay = min(_retry_after_s(exc) or 0.5 * 2**attempt, MAX_RETRY_SLEEP_S)
+                elapsed = time.perf_counter() - started
+                if attempt >= self.max_retries or not _is_retryable(exc) or elapsed + delay >= self.timeout_s:
+                    raise
+                attempt += 1
+                logger.info("claude request error (%s): retry %d in %.2fs", type(exc).__name__, attempt, delay)
+                self._sleep(max(delay, 0.0))
 
     def _call(self, snapshot: MarketSnapshot, portfolio: PortfolioView) -> Decision:
         prompt = self.format_prompt(snapshot, portfolio)
@@ -410,7 +469,8 @@ class ClaudeDecisionEngine:
 
     def _get_client(self) -> Any:
         if self._client is None:
-            self._client = anthropic.Anthropic(timeout=self.timeout_s, max_retries=self.max_retries)
+            # max_retries=0: the SDK would honour any Retry-After; ``_request`` retries instead.
+            self._client = anthropic.Anthropic(timeout=self.timeout_s, max_retries=0)
         return self._client
 
     def _roll_day(self) -> None:

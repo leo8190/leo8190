@@ -15,12 +15,20 @@ from .models import ConfigError
 
 LIVE_CONFIRM_PHRASE = "YES_I_ACCEPT_REAL_MONEY_RISK"
 DEFAULT_MODEL = "claude-haiku-4-5"
-ENGINES = ("claude", "rules", "hybrid")
+ENGINES = ("claude", "rules", "hybrid", "jev")
 MODES = ("paper", "live")
+_TRUE = {"1", "true", "yes", "y", "on", "si", "sí"}
+_FALSE = {"0", "false", "no", "n", "off"}
 
 
 def _bool(value: str) -> bool:
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    """Strict boolean: a typo must never silently mean False (e.g. mainnet or no flatten)."""
+    text = value.strip().lower()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise ValueError(f"not a boolean: {value!r} (use true/false)")
 
 
 @dataclass(frozen=True)
@@ -59,6 +67,8 @@ class Settings:
     hybrid_heartbeat_candles: int = 12  # hybrid: ask Claude at least every N candles
     history_candles: int = 200
     paper_start_cash: float = 1000.0
+    # live: most quote the bot may use (plus its realized PnL); 0 = the whole free balance
+    live_max_capital: float = 0.0
     fee_pct: float = 0.1
     slippage_pct: float = 0.05
     journal_path: str = "jev_journal.sqlite3"
@@ -110,6 +120,7 @@ class Settings:
             (self.hybrid_heartbeat_candles >= 1, "JEV_HYBRID_HEARTBEAT_CANDLES must be >= 1"),
             (self.history_candles >= 60, "JEV_HISTORY_CANDLES must be >= 60"),
             (self.paper_start_cash > 0, "JEV_PAPER_START_CASH must be > 0"),
+            (self.live_max_capital >= 0, "JEV_LIVE_MAX_CAPITAL must be >= 0 (0 = whole free balance)"),
             (0 <= self.fee_pct < 5, "JEV_FEE_PCT must be in [0, 5)"),
             (0 <= self.slippage_pct < 5, "JEV_SLIPPAGE_PCT must be in [0, 5)"),
         ]
@@ -173,6 +184,7 @@ _SETTINGS_ENV = {
     "hybrid_heartbeat_candles": "JEV_HYBRID_HEARTBEAT_CANDLES",
     "history_candles": "JEV_HISTORY_CANDLES",
     "paper_start_cash": "JEV_PAPER_START_CASH",
+    "live_max_capital": "JEV_LIVE_MAX_CAPITAL",
     "fee_pct": "JEV_FEE_PCT",
     "slippage_pct": "JEV_SLIPPAGE_PCT",
     "journal_path": "JEV_JOURNAL_PATH",

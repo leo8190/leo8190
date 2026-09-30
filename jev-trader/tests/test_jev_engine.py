@@ -83,7 +83,8 @@ def test_buy_decision_maps_answers_and_costs():
     assert decision.confidence == pytest.approx(0.71)  # min(p_buy, edge)
     assert decision.stop_loss_pct == pytest.approx(1.6)  # normal = 2x ATR% (0.8)
     assert decision.take_profit_pct == pytest.approx(3.2)
-    assert decision.size_pct == pytest.approx((1.4 + 1) / 4)
+    # (1.4 + 1) / 4 = 60 % of the allowed position; max position 25 % -> 15 % of equity
+    assert decision.size_pct == pytest.approx((1.4 + 1) / 4 * 0.25)
     assert decision.model == "jev-1.13"
     assert decision.input_tokens == 400
     assert decision.cost_usd == pytest.approx(400 * DEFAULT_PRICE_PER_MTOK_INPUT / 1e6)
@@ -223,3 +224,66 @@ def test_state_is_deterministic_numeric_and_rounded():
     assert "ema_trend" not in state["market"]["indicators"]  # None values are dropped
     assert state["position"]["position_pct_of_equity"] == pytest.approx(24.28, abs=0.01)
     assert json.dumps(state)  # JSON-serializable
+
+
+# ---------------------------------------------------------------------------- regressions (AI review)
+
+
+@pytest.mark.parametrize("score, max_position, expected", [(0.0, 25.0, 0.0625), (3.0, 25.0, 0.25), (1.0, 100.0, 0.5)])
+def test_size_is_a_fraction_of_the_max_position_in_equity_units(score, max_position, expected):
+    # regression ai-2: size_pct meant "fraction of the allowed position" but the risk manager
+    # reads it as a fraction of equity, so every weak setup got the full 25 % position
+    engine, _ = make_engine(ok(jev_payload(size=score)), max_position_pct=max_position)
+    assert engine.decide(snapshot(), flat()).size_pct == pytest.approx(expected)
+    with pytest.raises(ValueError):
+        JevDecisionEngine(max_position_pct=0.0)
+
+
+def test_state_keeps_price_unit_indicators_of_low_priced_coins():
+    # regression ai-3: EMAs/MACD/ATR/Bollinger were rounded to 4 decimals -> 0.0 for PEPE
+    ind = IndicatorSet(ema_fast=1.2401e-05, ema_slow=1.2302e-05, macd=-3.21e-08, atr=4.5e-07, atr_pct=3.6,
+                       bb_upper=1.3e-05, rsi=55.123456, bb_pct_b=0.4567891)
+    snap = MarketSnapshot(symbol="PEPE/USDT", timeframe="5m", timestamp=1_767_225_600_000, price=1.2345e-05,
+                          indicators=ind, recent_closes=[1.23e-05])
+    state = build_state(snap, flat(), cost_pct=0.3)["market"]["indicators"]
+    assert state["ema_fast"] == 1.2401e-05 and state["ema_slow"] == 1.2302e-05
+    assert state["macd"] == -3.21e-08 and state["atr"] == 4.5e-07 and state["bb_upper"] == 1.3e-05
+    assert state["rsi"] == 55.1235 and state["bb_pct_b"] == 0.4568 and state["atr_pct"] == 3.6
+
+
+def test_retry_after_is_not_honoured_and_the_call_stays_bounded():
+    # regression ai-4: RetryPolicy(backoff_max=1) still slept for the server Retry-After (up to 30 s)
+    import time
+
+    replies = iter([httpx2.Response(429, headers={"retry-after": "25"}, json={"error": "slow"}),
+                    httpx2.Response(200, json=jev_payload())])
+    engine = JevDecisionEngine(timeout_s=2.0, max_retries=1, clock_ms=lambda: 1_767_225_600_000)
+    policy = engine.retry_policy()
+    assert policy.respect_retry_after is False and policy.timeout <= 3.0 and policy.backoff_max <= 1.0
+    engine._client = ts.TypeSafeClient(api_key="k", transport=httpx2.MockTransport(lambda r: next(replies)),
+                                       retry=policy, timeout=2.0)
+    started = time.perf_counter()
+    decision = engine.decide(snapshot(), flat())
+    assert time.perf_counter() - started < 2.0
+    assert decision.source == "jev"
+
+
+def test_budget_fallback_is_not_counted_as_an_llm_call():
+    # regression ai-5: the budget-exhausted HOLD carried model=..., so the backtest counted
+    # 50 "failed LLM calls" (and switched to rules) without a single request
+    from jev.backtest import run_backtest
+    from jev.config import Settings
+    from jev.market.synthetic import SyntheticMarket
+
+    class NoCalls:
+        def system_one(self, **kwargs):
+            raise AssertionError("no request expected")
+
+    engine = JevDecisionEngine(daily_budget_usd=0.0, client=NoCalls())
+    held = engine.decide(snapshot(), flat())
+    assert held.source == "fallback" and "budget" in held.reasoning and held.model is None
+    candles = SyntheticMarket(seed=1, initial_history=0).generate(150)
+    result = run_backtest(candles, Settings(engine="jev"), engine, warmup=60, max_llm_calls=50,
+                          historical_data=False)
+    assert result.llm_calls == 0 and result.final_engine_name == "jev"
+    assert not any("llamadas al LLM fallaron" in w for w in result.warnings)

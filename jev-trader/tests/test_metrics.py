@@ -67,9 +67,9 @@ def test_profit_factor_none_without_losses() -> None:
 def test_zero_std_gives_zero_sharpe_and_sortino() -> None:
     flat = compute_metrics(_curve([100] * 10), [], start_equity=100, timeframe_ms=HOUR)
     assert flat.sharpe == 0.0 and flat.sortino == 0.0
-    # constant positive growth: std 0 and no downside -> both 0.0 by contract
+    # constant positive growth: std 0 -> Sharpe 0.0; no downside at all -> Sortino unbounded (None)
     growth = compute_metrics(_curve([100 * 1.01**i for i in range(10)]), [], start_equity=100, timeframe_ms=HOUR)
-    assert growth.sharpe == 0.0 and growth.sortino == 0.0
+    assert growth.sharpe == 0.0 and growth.sortino is None
 
 
 def test_too_few_points_gives_zero_ratios() -> None:
@@ -149,3 +149,16 @@ def test_render_text_summary_aligned() -> None:
     for label in ("Retorno total", "Máx. drawdown", "Sharpe", "Tasa de acierto", "Coste LLM (USD)"):
         assert label in joined
     assert "+12,35 %" in text and "1.123,45" in text and "n/d (sin pérdidas)" in text
+
+
+def test_summary_says_no_trades_and_unbounded_sortino() -> None:
+    # regression money-6: no trades read as "sin pérdidas" and a loss-free curve as Sortino 0,00
+    rising = compute_metrics(_curve([100, 101, 103, 104, 106]), [], start_equity=100, timeframe_ms=HOUR)
+    assert rising.sortino is None and rising.sharpe > 0
+    text = render_text_summary(rising)
+    assert "n/d (sin operaciones)" in text and "n/d (sin pérdidas)" not in text
+    assert "n/d (sin caídas)" in text
+    winner = compute_metrics(_curve([100, 101]), [_trade(1, 1.0)], start_equity=100, timeframe_ms=HOUR)
+    assert "n/d (sin pérdidas)" in render_text_summary(winner)
+    flat = compute_metrics(_curve([100] * 5), [], start_equity=100, timeframe_ms=HOUR)
+    assert flat.sortino == 0.0

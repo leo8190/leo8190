@@ -458,3 +458,129 @@ def test_run_forever_survives_unexpected_errors_but_not_forever():
     assert events(eng.journal).count("error") == 3
     with pytest.raises(RuntimeError):
         eng.run_forever(max_iterations=10, wait_for_close=False)
+
+
+# ---------------------------------------------------------------------------- regressions (review)
+
+
+def test_withdrawal_while_holding_does_not_trip_the_kill_switch_or_force_a_sale():
+    # regression money-1 / safety-1 / runtime-2: 110 USDT withdrawn at an unchanged price
+    # read as an 11 % drawdown, tripped max_drawdown and market-sold the position
+    market = FakeMarket(flat_candles())
+    eng = make(market, buy(), cfg=settings(max_daily_loss_pct=3.0, max_drawdown_pct=10.0))
+    eng.step()
+    assert eng.portfolio.in_position
+    eng.broker.cash -= 110.0  # the user withdraws (or spends) 110 USDT from the account
+    market.add(candle(30, 100.0))
+    result = eng.step()
+    assert result.halted is None and "kill_switch" not in result.events
+    assert "external_flow" in result.events and eng.portfolio.in_position
+    assert [f.side for f in result.fills] == []
+    assert "external_flow" in events(eng.journal)
+
+
+def test_deposit_does_not_hide_a_real_daily_loss():
+    market = FakeMarket(flat_candles())
+    eng = make(market, buy(stop=50.0, tp=200.0), cfg=settings(risk_per_trade_pct=5.0, max_daily_loss_pct=3.0))
+    eng.step()  # 2.5 BTC at 100 (25 % of 1000)
+    eng.broker.cash += 60.0  # deposit
+    market.add(candle(30, 80.0, low=79.0))  # -20 % on the position = -5 % of the account
+    result = eng.step()
+    assert result.halted == "daily_loss" and not eng.portfolio.in_position
+
+
+def test_max_capital_caps_sizing_and_equity_on_a_big_account():
+    # regression safety-6 / runtime-3: live sized every trade from the whole free balance
+    market = FakeMarket(flat_candles())
+    broker = PaperBroker(SYMBOL, 20_000.0, 0.1, 0.0)
+    eng = TradingEngine(settings(), market, broker, Scripted(buy()), Journal(":memory:"), state_key="t",
+                        max_capital=1000.0)
+    result = eng.step()
+    assert result.fills[0].quantity * result.fills[0].price == pytest.approx(250.0)  # 25 % of 1000, not of 20000
+    assert result.equity == pytest.approx(1000.0 - result.fills[0].fee)
+    broker.cash += 5000.0  # a deposit above the cap changes nothing for the bot
+    market.add(candle(30, 100.0))
+    later = eng.step()
+    assert "external_flow" not in later.events and later.equity == pytest.approx(result.equity)
+    with pytest.raises(ValueError):
+        TradingEngine(settings(), market, broker, Scripted(), Journal(":memory:"), max_capital=-1.0)
+
+
+def test_stale_candles_skip_new_entries_but_keep_protection():
+    # regression safety-2: a 6 h old candle (stalled klines / start-up) still triggered a BUY
+    market = FakeMarket(flat_candles())
+    eng = make(market, buy())
+    eng.clock_ms = lambda: market.now_ms() + 6 * 3_600_000
+    result = eng.step()
+    assert result.status == OK and "stale_data" in result.events
+    assert result.decision is None and result.fills == [] and eng.decision_engine.calls == 0
+
+
+def test_stop_and_target_follow_the_real_fill_price():
+    # regression safety-2: stop/TP were set from the old close, so a fill far below it put
+    # the stop ABOVE the entry (guaranteed immediate stop-out)
+    market = FakeMarket(flat_candles(price=100_000.0))
+    market.price = 97_000.0  # the market moved since the close
+    eng = make(market, buy(stop=2.0, tp=4.0))
+    eng.step()
+    p = eng.portfolio
+    assert p.stop_loss == pytest.approx(97_000.0 * 0.98) and p.stop_loss < p.avg_entry_price
+    assert p.take_profit == pytest.approx(97_000.0 * 1.04)
+
+
+class InterruptingBroker(PaperBroker):
+    def execute(self, order, market_price, timestamp):
+        super().execute(order, market_price, timestamp)  # the exchange filled it...
+        raise KeyboardInterrupt  # ...but the process is force-quit before the reply is booked
+
+
+def test_forced_quit_during_an_order_halts_entries_on_restart(tmp_path):
+    # regression runtime-1: a fill lost mid-order left an unmanaged position and no trace
+    path = str(tmp_path / "j.sqlite3")
+    market = FakeMarket(flat_candles())
+    with Journal(path) as journal:
+        eng = make(market, buy(), journal=journal, broker=InterruptingBroker(SYMBOL, 1000.0, 0.1, 0.0))
+        eng.run_forever(max_iterations=1, wait_for_close=False)
+        assert journal.load_state("engine:test")["order_in_flight"]["side"] == "buy"
+    with Journal(path) as journal:
+        eng2 = make(market, buy(), journal=journal)
+        assert eng2.restore_state() is True
+        assert eng2.portfolio.halted_reason == "order_state_unknown"
+        assert "order_state_unknown" in events(journal)
+        market.add(candle(30, 100.0))
+        assert eng2.step().fills == []  # no new entry until a human checks the exchange
+
+
+def test_known_order_outcomes_clear_the_in_flight_marker():
+    market = FakeMarket(flat_candles())
+    eng = make(market, buy(), broker=RejectingBroker(OrderRejectedError("min notional")))
+    eng.step()
+    assert eng.journal.load_state("engine:test")["order_in_flight"] is None
+    eng2 = make(FakeMarket(flat_candles()), buy(), broker=RejectingBroker(RuntimeError("bug")))
+    result = eng2.step()  # unexpected broker error: the order state is unknown
+    assert eng2.portfolio.halted_reason == "order_state_unknown" and "order_state_unknown" in result.events
+
+
+def test_a_journal_error_never_loses_a_real_fill():
+    class BrokenJournal(Journal):
+        def record_fill(self, fill, reason=""):
+            import sqlite3
+
+            raise sqlite3.OperationalError("database is locked")
+
+    market = FakeMarket(flat_candles())
+    eng = make(market, buy(), journal=BrokenJournal(":memory:"))
+    result = eng.step()
+    assert len(result.fills) == 1 and eng.portfolio.qty == pytest.approx(2.5)
+
+
+def test_saved_state_keeps_only_the_last_equity_point():
+    # regression runtime-8: the state blob grew with every candle
+    market = FakeMarket(flat_candles())
+    eng = make(market)
+    for i in range(5):
+        eng.step()
+        market.add(candle(30 + i, 100.0))
+    state = eng.journal.load_state("engine:test")
+    assert len(state["portfolio"]["equity_curve"]) == 1
+    assert len(eng.journal.equity_curve()) == 5  # the history stays in the journal table

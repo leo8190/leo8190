@@ -38,6 +38,7 @@ SIZE_RUBRIC = [
 ]
 REWARD_RISK = 2.0
 MIN_STOP_PCT, MAX_STOP_PCT = 0.3, 10.0
+RETRY_BACKOFF_MAX_S = 1.0
 
 
 def _flat_questions(horizon: str) -> dict[str, Any]:
@@ -107,10 +108,21 @@ def _sig(value: float | None, figures: int = 6) -> float | None:
     return float(f"{value:.{figures}g}")
 
 
+_FIXED_DECIMAL_INDICATORS = frozenset({"rsi", "bb_pct_b", "volume_ratio"})
+
+
+def _indicator_value(name: str, value: float) -> float | None:
+    """Ratios and percents keep 4 decimals; price-unit indicators (EMAs, MACD, ATR,
+    Bollinger bands) keep 6 significant figures so low-priced coins do not round to 0."""
+    if name.endswith("_pct") or name in _FIXED_DECIMAL_INDICATORS:
+        return _round(value)
+    return _sig(value) if value is not None and math.isfinite(value) else None
+
+
 def build_state(snapshot: MarketSnapshot, portfolio: PortfolioView, cost_pct: float) -> dict[str, Any]:
     """Deterministic JSON state for Jev: numbers only, no free text from outside."""
     indicators = {
-        key: _round(value)
+        key: _indicator_value(key, value)
         for key, value in sorted(snapshot.indicators.model_dump().items())
         if value is not None
     }
@@ -162,7 +174,14 @@ class JevDecisionEngine:
         horizon_candles: int = 12,
         client: Any | None = None,
         clock_ms: Callable[[], int] | None = None,
+        max_position_pct: float = 25.0,
     ) -> None:
+        """``max_position_pct``: the risk manager's max position (% of equity). Jev scores the
+        setup as a fraction of the allowed position; ``Decision.size_pct`` is a fraction of
+        equity, so the fraction is scaled by it."""
+        if not math.isfinite(max_position_pct) or not 0 < max_position_pct <= 100:
+            raise ValueError(f"max_position_pct must be in (0, 100], got {max_position_pct!r}")
+        self.max_position_pct = float(max_position_pct)
         self.model = model
         self.timeout_s = timeout_s
         self.max_retries = max_retries
@@ -181,12 +200,19 @@ class JevDecisionEngine:
     def _get_client(self) -> Any:
         # Created lazily so the engine can be built (and tested) without TYPESAFE_API_KEY.
         if self._client is None:
-            self._client = ts.TypeSafeClient(
-                model=self.model,
-                timeout=self.timeout_s,
-                retry=ts.RetryPolicy(max_retries=self.max_retries, backoff_max=1.0),
-            )
+            self._client = ts.TypeSafeClient(model=self.model, timeout=self.timeout_s, retry=self.retry_policy())
         return self._client
+
+    def retry_policy(self) -> ts.RetryPolicy:
+        """Never sleep for a server Retry-After (the SDK would wait up to its 30 s budget):
+        a short capped backoff, and the whole call (attempts + waits) stays bounded so the
+        trading loop and its stop checks are never blocked for long."""
+        return ts.RetryPolicy(
+            max_retries=self.max_retries,
+            backoff_max=RETRY_BACKOFF_MAX_S,
+            respect_retry_after=False,
+            timeout=self.timeout_s + RETRY_BACKOFF_MAX_S,
+        )
 
     def _roll_budget(self) -> None:
         day = _utc_day(self._clock_ms())
@@ -198,9 +224,11 @@ class JevDecisionEngine:
         input_tokens = getattr(usage, "input_tokens", None) or 0
         return input_tokens * self.price_per_mtok_input / 1_000_000
 
-    def _fallback(self, reason: str, **extra: Any) -> Decision:
+    def _fallback(self, reason: str, attempted: bool = True, **extra: Any) -> Decision:
+        """HOLD fallback. ``model`` is set only when a request was attempted, so callers that
+        count LLM calls by ``decision.model`` (backtest, hybrid) do not count skipped ones."""
         decision = Decision.hold(f"jev fallback: {reason}", source="fallback")
-        return decision.model_copy(update={"model": self.model, **extra})
+        return decision.model_copy(update={"model": self.model if attempted else None, **extra})
 
     # -- decision -------------------------------------------------------------
 
@@ -214,7 +242,7 @@ class JevDecisionEngine:
     def _decide(self, snapshot: MarketSnapshot, portfolio: PortfolioView) -> Decision:
         self._roll_budget()
         if self.spent_today_usd >= self.daily_budget_usd:
-            return self._fallback("daily Jev budget exhausted")
+            return self._fallback("daily Jev budget exhausted", attempted=False)
 
         horizon = f"{self.horizon_candles} candles of {snapshot.timeframe}"
         questions = _holding_questions(horizon) if portfolio.in_position else _flat_questions(horizon)
@@ -314,7 +342,9 @@ class JevDecisionEngine:
         size_score = float(response.scores["size"].score)  # expected level in [0, 3]
         if not math.isfinite(size_score):
             raise ValueError("non-finite size score")
-        size_pct = _clamp((size_score + 1) / len(SIZE_RUBRIC), 0.25, 1.0)
+        # Fraction of the allowed position (0.25..1.0), expressed as a fraction of equity.
+        fraction = _clamp((size_score + 1) / len(SIZE_RUBRIC), 0.25, 1.0)
+        size_pct = fraction * self.max_position_pct / 100.0
         # Both the choice and the independent edge estimate must agree for a strong entry.
         confidence = _clamp(min(p_buy, edge), 0.0, 1.0)
         return Decision(
@@ -325,7 +355,7 @@ class JevDecisionEngine:
             take_profit_pct=stop_pct * REWARD_RISK,
             reasoning=(
                 f"jev: enter long (p_buy={p_buy:.2f}, edge={edge:.2f}, stop={width}, "
-                f"size_score={size_score:.2f}/3)"
+                f"size_score={size_score:.2f}/3 -> {fraction:.0%} of the max position)"
             ),
             source="jev",
         )

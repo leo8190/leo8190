@@ -24,6 +24,9 @@ STOP_LOSS = "stop_loss"
 TAKE_PROFIT = "take_profit"
 
 CASH_BUFFER = 0.995  # keep 0.5 % of the cash free for price moves and rounding
+# A partial SELL must leave at least min notional x this (slippage, fees and the move
+# between the decision close and the fill); otherwise the whole position is sold.
+PARTIAL_SELL_MARGIN = 1.05
 
 _TF_RE = re.compile(r"([1-9][0-9]*)([smhdw])")
 _TF_UNIT_MS = {"s": 1_000, "m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
@@ -80,7 +83,8 @@ class RiskManager:
         """(reason, exit price) if the candle touched the stop or the take-profit.
 
         Both touched in the same candle -> stop_loss (we cannot know which came first).
-        With ``open_price`` a gap below the stop exits at the open (worse than the stop).
+        With ``open_price`` a gap through a level exits at the open: below the stop that
+        is worse than the stop, above the take-profit it is better than the target.
         """
         if not portfolio.in_position:
             return None
@@ -88,11 +92,11 @@ class RiskManager:
             logger.warning("protective check skipped: non-finite candle values low=%r high=%r", low, high)
             return None
         stop, target = portfolio.stop_loss, portfolio.take_profit
+        gapped = open_price is not None and open_price > 0
         if stop is not None and low <= stop:
-            price = min(stop, open_price) if open_price is not None and open_price > 0 else stop
-            return STOP_LOSS, price
+            return STOP_LOSS, min(stop, open_price) if gapped else stop
         if target is not None and high >= target:
-            return TAKE_PROFIT, target
+            return TAKE_PROFIT, max(target, open_price) if gapped else target
         return None
 
     # ------------------------------------------------------------------ kill switch
@@ -252,7 +256,14 @@ class RiskManager:
             step = timeframe_ms(snapshot.timeframe)
         except ValueError:
             return f"cannot check cooldown: invalid timeframe {snapshot.timeframe!r}"
-        elapsed = (snapshot.timestamp - portfolio.last_exit_ts) // step
+        # Both times on the candle grid: the snapshot is a candle OPEN time, while a live
+        # exit is stamped with the wall clock (close + grace) and a backtest exit with the
+        # open of its candle. Counting candles from the open of the exit candle makes both
+        # block exactly ``need`` decisions on the candles that close after the exit.
+        from .market.timeframes import floor_to_timeframe
+
+        exit_candle = floor_to_timeframe(portfolio.last_exit_ts, snapshot.timeframe)
+        elapsed = (snapshot.timestamp - exit_candle) // step
         if elapsed < need:
             return f"cooldown: {max(elapsed, 0)} of {need} candles since the last exit"
         return None
@@ -309,7 +320,9 @@ class RiskManager:
         if quantity < held:
             remaining_value = (held - quantity) * price
             order_value = quantity * price
-            if remaining_value < cfg.min_order_notional or order_value < cfg.min_order_notional:
+            # The remainder must stay sellable at the fill price too, not only at this close.
+            too_small = cfg.min_order_notional * PARTIAL_SELL_MARGIN
+            if remaining_value < too_small or order_value < cfg.min_order_notional:
                 quantity = held
                 note = f"whole position (partial {fraction * 100:.0f}% would leave or trade < min notional)"
         reason = (

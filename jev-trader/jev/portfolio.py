@@ -23,6 +23,10 @@ DAY_MS = 86_400_000
 STATE_VERSION = 1
 # A SELL may exceed the held quantity by this relative amount (float noise); it is clamped.
 _SELL_REL_TOLERANCE = 1e-9
+# Balance changes no fill explains and smaller than this share of the account value are
+# ignored (fee estimates for fees paid in another coin, rounding); bigger ones are
+# deposits / withdrawals (see ``observe_balances``).
+EXTERNAL_FLOW_TOLERANCE = 0.0005
 
 
 def utc_day(timestamp_ms: int) -> int:
@@ -41,6 +45,8 @@ class Portfolio:
     ``dust_notional`` (quote units, optional): after a SELL, a remainder worth less than
     this at the fill price is also treated as closed. Set it to the exchange minimum
     order notional in live trading, where precision truncation leaves unsellable dust.
+    That remainder is not written off: it is carried (with its cost) into the next
+    position, so it is sold with it and its cost ends up in the realized PnL.
     """
 
     def __init__(
@@ -68,6 +74,14 @@ class Portfolio:
         self.entry_fees: float = 0.0  # buy fees of the open position not yet attributed to a trade
         self.stop_loss: float | None = None
         self.take_profit: float | None = None
+        # Unsellable remainder of a closed position (below the minimum order), still held
+        # by the broker; it joins the next position.
+        self.carry_qty: float = 0.0
+        self.carry_cost: float = 0.0
+
+        # Broker balances the booked fills explain (None until the first observation).
+        self.expected_cash: float | None = None
+        self.expected_base: float | None = None
 
         # Results.
         self.realized_pnl: float = 0.0
@@ -98,6 +112,11 @@ class Portfolio:
         return self.qty * self.avg_entry_price
 
     @property
+    def capital_in_use(self) -> float:
+        """Quote spent on coins still held: the open position plus a carried remainder."""
+        return self.cost_basis + self.carry_cost
+
+    @property
     def last_equity(self) -> float | None:
         return self.equity_curve[-1][1] if self.equity_curve else None
 
@@ -119,6 +138,7 @@ class Portfolio:
         if fill.side is Side.SELL:
             self._check_sell_qty(fill.quantity)
         self._roll_day(utc_day(fill.timestamp))
+        qty_before = self.qty if self.in_position else 0.0
         if fill.side is Side.BUY:
             self._apply_buy(fill, stop_loss, take_profit)
             record = None
@@ -126,7 +146,17 @@ class Portfolio:
             record = self._apply_sell(fill, reason)
         self.fees_paid += fill.fee
         self.trades_today += 1
+        self._expect_fill(fill, qty_before)
         return record
+
+    def _expect_fill(self, fill: Fill, qty_before: float) -> None:
+        """Move the balances the next ``observe_balances`` expects by this fill."""
+        if self.expected_cash is not None:
+            notional = fill.quantity * fill.price
+            self.expected_cash += -(notional + fill.fee) if fill.side is Side.BUY else notional - fill.fee
+        if self.expected_base is not None:
+            qty_after = self.qty if self.in_position else 0.0
+            self.expected_base = qty_after if qty_after == 0.0 else self.expected_base + qty_after - qty_before
 
     def _validate_fill(self, fill: Fill) -> None:
         if fill.symbol != self.symbol:
@@ -151,6 +181,9 @@ class Portfolio:
         if not self.in_position:
             self._reset_position()
             self.entry_time = fill.timestamp
+            if self.carry_qty > self.dust_qty:  # the unsellable remainder joins this position
+                self.qty, self.avg_entry_price = self.carry_qty, self.carry_cost / self.carry_qty
+            self.carry_qty = self.carry_cost = 0.0
         total_cost = self.cost_basis + fill.quantity * fill.price + fill.fee
         self.qty += fill.quantity
         self.avg_entry_price = total_cost / self.qty
@@ -192,8 +225,13 @@ class Portfolio:
             sold, self.base_currency, fill.price, fill.fee, reason or "no reason", pnl, pnl_pct, self.qty,
         )
         if self._is_dust(self.qty, fill.price):
-            if self.qty > 0:
-                logger.info("writing off dust remainder of %.10g %s", self.qty, self.base_currency)
+            if self.qty > self.dust_qty:
+                logger.info(
+                    "remainder of %.10g %s is below the minimum order: carried into the next position",
+                    self.qty, self.base_currency,
+                )
+                self.carry_qty += self.qty
+                self.carry_cost += self.qty * avg
             self._reset_position()
             self.last_exit_ts = fill.timestamp
         return record
@@ -210,16 +248,26 @@ class Portfolio:
         self.take_profit = None
 
     def reconcile(self, broker_base_qty: float, timestamp: int) -> float:
-        """Shrink the local position to what the broker actually holds.
+        """Shrink the local position (or carried remainder) to what the broker holds.
 
-        Never grows the position (the cost of unknown coins is unknown). Returns the
-        quantity written off (0.0 when nothing changed).
+        Never grows the position (the cost of unknown coins is unknown). The cost of the
+        coins written off is charged to the realized PnL. Returns the quantity written
+        off (0.0 when nothing changed).
         """
         if not _finite(broker_base_qty):
             raise ValueError(f"broker_base_qty must be finite, got {broker_base_qty!r}")
-        if not self.in_position:
-            return 0.0
         held = max(float(broker_base_qty), 0.0)
+        if not self.in_position:
+            if self.carry_qty <= 0 or held >= self.carry_qty - self.dust_qty:
+                return 0.0
+            missing = self.carry_qty - held
+            logger.warning("broker no longer holds the carried remainder: writing off %.10g %s",
+                           missing, self.base_currency)
+            charged = self.carry_cost * missing / self.carry_qty
+            self.carry_cost -= charged
+            self.carry_qty = held
+            self.realized_pnl -= charged
+            return missing
         tolerance = max(self.dust_qty, self.qty * _SELL_REL_TOLERANCE)
         if held >= self.qty - tolerance:
             return 0.0
@@ -228,6 +276,7 @@ class Portfolio:
             "broker holds %.10g %s but the portfolio tracks %.10g: writing off %.10g",
             held, self.base_currency, self.qty, missing,
         )
+        self.realized_pnl -= missing * (self.avg_entry_price or 0.0)
         self.entry_fees *= held / self.qty
         self.qty = held
         if self.qty <= self.dust_qty:
@@ -248,13 +297,49 @@ class Portfolio:
         if self.equity_peak is None or equity > self.equity_peak:
             self.equity_peak = float(equity)
 
+    def observe_balances(self, ts: int, cash: float, base_qty: float, price: float) -> float:
+        """Detect deposits and withdrawals before marking the equity at ``ts``.
+
+        ``cash`` and ``base_qty`` are the balances the view uses (free quote cash and the
+        managed base quantity). Any change the booked fills do not explain is an external
+        flow (the user moved funds, bought or sold by hand): the equity peak and the day
+        start move by it, so the kill switch only measures trading PnL. Returns the flow
+        in quote units (positive = deposit, 0.0 when none).
+        """
+        if not all(_finite(v) for v in (cash, base_qty, price)) or price <= 0:
+            raise ValueError(f"balances and price must be finite (price > 0), got {cash!r}, {base_qty!r}, {price!r}")
+        flow = 0.0
+        if self.expected_cash is not None and self.expected_base is not None:
+            flow = (cash - self.expected_cash) + (base_qty - self.expected_base) * price
+            if abs(flow) <= EXTERNAL_FLOW_TOLERANCE * (abs(cash) + abs(base_qty * price)):
+                flow = 0.0
+        self.expected_cash, self.expected_base = float(cash), float(base_qty)
+        if flow:
+            self._roll_day(utc_day(ts))
+            if self.equity_peak is not None:
+                self.equity_peak = max(self.equity_peak + flow, 0.0)
+            if self.day_start_equity is not None:
+                self.day_start_equity = max(self.day_start_equity + flow, 0.0)
+            logger.warning(
+                "balances changed by %+.6g %s outside Jev Trader (deposit/withdrawal or manual trade): "
+                "kill-switch baselines adjusted, not counted as PnL", flow, self.quote_currency,
+            )
+        return flow
+
     def _roll_day(self, day: int) -> None:
-        """Start a new UTC day when ``day`` is later than the current one."""
+        """Start a new UTC day when ``day`` is later than the current one.
+
+        The new day starts from the last equity marked before the boundary (when it is
+        from the previous day), so the move of the candle that closes at 00:00 UTC, and
+        every candle on 1d timeframes, counts toward the daily loss.
+        """
         if self.current_day is not None and day <= self.current_day:
             return
+        last = self.equity_curve[-1] if self.equity_curve else None
         self.current_day = day
         self.trades_today = 0
-        self.day_start_equity = None  # set by the first mark of the day
+        # None -> set by the first mark of the day (no recent equity to start from)
+        self.day_start_equity = last[1] if last is not None and utc_day(last[0]) >= day - 1 else None
         if self.halted_reason == "daily_loss" and (self.halted_day is None or self.halted_day < day):
             logger.info("new UTC day: daily-loss halt cleared")
             self.halted_reason = None
@@ -341,8 +426,16 @@ class Portfolio:
 
     # ------------------------------------------------------------------ persistence
 
-    def to_state(self) -> dict[str, Any]:
-        """JSON-serializable snapshot of the full state (lossless with ``from_state``)."""
+    def to_state(self, equity_points: int | None = None) -> dict[str, Any]:
+        """JSON-serializable snapshot of the state (lossless with ``from_state``).
+
+        ``equity_points`` keeps only the last N points of the equity curve (the live loop
+        saves after every candle and only needs the last one; the full history is in the
+        journal's equity table). None keeps the whole curve.
+        """
+        curve = self.equity_curve
+        if equity_points is not None:
+            curve = curve[max(len(curve) - max(equity_points, 0), 0):]
         return {
             "version": STATE_VERSION,
             "symbol": self.symbol,
@@ -356,10 +449,14 @@ class Portfolio:
             "entry_fees": self.entry_fees,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
+            "carry_qty": self.carry_qty,
+            "carry_cost": self.carry_cost,
+            "expected_cash": self.expected_cash,
+            "expected_base": self.expected_base,
             "realized_pnl": self.realized_pnl,
             "fees_paid": self.fees_paid,
             "trades": [t.model_dump(mode="json") for t in self.trades],
-            "equity_curve": [[ts, eq] for ts, eq in self.equity_curve],
+            "equity_curve": [[ts, eq] for ts, eq in curve],
             "equity_peak": self.equity_peak,
             "current_day": self.current_day,
             "day_start_equity": self.day_start_equity,
@@ -388,6 +485,10 @@ class Portfolio:
         p.entry_fees = float(state["entry_fees"])
         p.stop_loss = _opt_float(state["stop_loss"])
         p.take_profit = _opt_float(state["take_profit"])
+        p.carry_qty = float(state.get("carry_qty", 0.0))
+        p.carry_cost = float(state.get("carry_cost", 0.0))
+        p.expected_cash = _opt_float(state.get("expected_cash"))
+        p.expected_base = _opt_float(state.get("expected_base"))
         p.realized_pnl = float(state["realized_pnl"])
         p.fees_paid = float(state["fees_paid"])
         p.trades = [TradeRecord.model_validate(t) for t in state["trades"]]

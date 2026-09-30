@@ -14,12 +14,15 @@ modo live, en la **testnet** del exchange.
 ## Qué hace
 
 - **Decide en cada vela cerrada** (por defecto BTC/USDT, 5 minutos) si comprar, vender o esperar.
-- **Tres motores de decisión** intercambiables:
+- **Cuatro motores de decisión** intercambiables:
   - `rules`: tendencia con EMA 9/21/50, MACD y RSI. Es determinista, instantáneo y gratis.
   - `claude`: Claude Haiku 4.5 recibe un snapshot compacto del mercado y responde con *structured
     outputs*: acción, confianza, tamaño, stop, take-profit y un razonamiento breve.
   - `hybrid` (el valor por defecto): las reglas filtran y Claude confirma, así que solo se paga el LLM
     cuando aporta algo.
+  - `jev` (opcional, acceso anticipado): el modelo *System One* de TypeSafe AI responde preguntas
+    tipadas (elección, puntaje, probabilidad) sobre el estado del mercado en una sola pasada. Necesita
+    `TYPESAFE_API_KEY`; sin clave devuelve HOLD.
 - **Gestor de riesgo** con la última palabra:
   - dimensiona cada orden por riesgo fijo (el % de equity que se pierde si salta el stop);
   - aplica posición máxima, confianza mínima, cooldown, límite diario de operaciones y kill switches.
@@ -50,7 +53,7 @@ modo live, en la **testnet** del exchange.
   |  1. Salidas protectoras: stop / take-profit     <- sin LLM      |
   |  2. Marca de equity + kill switch (pérdida      <- sin LLM      |
   |     diaria, drawdown) y cierre forzado                          |
-  |  3. Motor de decisión: rules | claude | hybrid                  |
+  |  3. Motor de decisión: rules | claude | hybrid | jev            |
   |        (si falla o se agota el presupuesto -> HOLD)             |
   |  4. RiskManager: aprueba, achica o rechaza      <- última       |
   |                                                    palabra      |
@@ -64,7 +67,7 @@ modo live, en la **testnet** del exchange.
 | `jev/models.py`, `jev/config.py` | Contratos compartidos (pydantic) y configuración desde el entorno |
 | `jev/market/` | Fuentes de datos: `CcxtMarket`, `CsvMarket`, `SyntheticMarket` (regímenes alcista, bajista y lateral) |
 | `jev/indicators.py`, `jev/features.py` | Indicadores puros y construcción del `MarketSnapshot` |
-| `jev/brain/` | Motores `rules`, `claude` e `hybrid`, y su fábrica |
+| `jev/brain/` | Motores `rules`, `claude`, `hybrid` y `jev`, y su fábrica |
 | `jev/risk.py`, `jev/portfolio.py` | Gestión de riesgo, kill switches, contabilidad de la posición |
 | `jev/execution/` | `PaperBroker` (slippage y comisiones) y `CcxtBroker` (órdenes reales, testnet por defecto) |
 | `jev/engine.py` | Bucle en tiempo real (paper y live) |
@@ -104,7 +107,9 @@ modo live, en la **testnet** del exchange.
   - **nunca para salir**: si las reglas dicen SELL, se vende sin esperar al LLM. Stops, take-profits y
     kill switches no pasan por el LLM.
 - Si Claude falla (sin clave, timeout, error de la API, respuesta inválida o presupuesto diario agotado),
-  la decisión es **HOLD**. Un fallo del LLM nunca abre una posición ni bloquea una salida.
+  la decisión es **HOLD**. Un fallo del LLM nunca abre una posición ni bloquea una salida: los reintentos
+  esperan como máximo 1 s (nunca el `Retry-After` completo del servidor) y solo mientras quepan en el
+  timeout.
 
 ### Costo estimado por decisión (Claude Haiku 4.5)
 
@@ -170,6 +175,30 @@ consulta al LLM devuelve HOLD y la CLI lo avisa.
 2. En `.env`, configurá `JEV_MODE=live`, `JEV_USE_TESTNET=true`, `JEV_API_KEY=...` y `JEV_API_SECRET=...`.
 3. Ejecutá `jev live`. Se muestra un banner con la red (TESTNET) y el bot opera con fondos de prueba.
 
+## Cargar dinero (modo live)
+
+El bot **no deposita ni retira nada**: opera con el saldo que haya en tu cuenta del exchange, y las claves
+de API no deben tener permiso de retiro.
+
+1. **Probá primero sin dinero real**: `jev paper` (simulado) y después la testnet (arriba). La testnet usa
+   fondos de prueba y claves propias de `testnet.binance.vision`; las claves de tu cuenta real no sirven ahí.
+2. **Depositá en el exchange** (por ejemplo Binance) con los medios que ofrezca en tu país y convertí a la
+   moneda *quote* del par (USDT para `BTC/USDT`).
+3. **Poné solo lo que querés arriesgar al alcance del bot.** En live el bot usa **todo el USDT libre de la
+   cuenta** para calcular el tamaño de cada orden (1 % de riesgo, posición máxima 25 %…). Dos formas de
+   limitarlo, combinables:
+   - una **subcuenta dedicada** con solo ese monto (lo más seguro);
+   - `JEV_LIVE_MAX_CAPITAL=200`: el bot opera como máximo con 200 USDT más su PnL realizado, aunque la
+     cuenta tenga más.
+4. Configurá `.env` para mainnet (`JEV_MODE=live`, `JEV_USE_TESTNET=false`,
+   `JEV_LIVE_CONFIRM=YES_I_ACCEPT_REAL_MONEY_RISK`, claves) y ejecutá `jev live`: pide escribir el símbolo
+   para confirmar.
+
+Depósitos, retiros y compras o ventas manuales con el bot andando se detectan como **movimientos externos**
+(evento `external_flow` en el journal): no cuentan como ganancia ni pérdida, así que no disparan el kill
+switch ni esconden una pérdida real. Las monedas que el bot no compró (por ejemplo, el saldo inicial de la
+testnet) no las gestiona ni les pone stop, y `jev live` lo avisa al arrancar.
+
 ## Modelo de seguridad
 
 - **Paper por defecto** (`JEV_MODE=paper`). `paper`, `decide`, `download` y `backtest` nunca envían
@@ -183,9 +212,13 @@ consulta al LLM devuelve HOLD y la CLI lo avisa.
   - **sin permiso de retiro**;
   - con **whitelist de IP**;
   - solo con permiso de trading spot.
-  - Jev Trader nunca imprime ni guarda las claves: el journal redacta los campos sensibles.
-- **Kill switches**:
-  - pérdida diaria (`JEV_MAX_DAILY_LOSS_PCT`): bloquea nuevas entradas hasta el próximo día UTC;
+  - Jev Trader nunca imprime ni guarda las claves: el journal redacta los campos sensibles y los logs
+    (incluso con `-vv`) reemplazan las claves por `***`.
+- **Capital en live**: todo el saldo libre de la moneda quote, o como máximo `JEV_LIVE_MAX_CAPITAL` (ver
+  [Cargar dinero](#cargar-dinero-modo-live)).
+- **Kill switches** (miden solo el PnL de trading: depósitos y retiros no cuentan):
+  - pérdida diaria (`JEV_MAX_DAILY_LOSS_PCT`), medida desde la última equity del día UTC anterior (también
+    funciona con velas de 1d): bloquea nuevas entradas hasta el próximo día UTC;
   - drawdown desde el pico (`JEV_MAX_DRAWDOWN_PCT`): bloquea hasta un reset manual con
     `jev status --reset-halt`.
   - Con `JEV_FLATTEN_ON_KILL=true` también se cierra la posición. El estado de halt se persiste, así que
@@ -196,20 +229,29 @@ consulta al LLM devuelve HOLD y la CLI lo avisa.
   riesgo, y los stops se recortan a `[JEV_MIN_STOP_PCT, JEV_MAX_STOP_PCT]`.
 - **Salidas protectoras sin LLM**: stop-loss y take-profit se evalúan antes de consultar a cualquier motor.
 - **Fallo del LLM = HOLD**, con presupuesto diario en USD.
-- **Estado incierto de una orden**: si el exchange no confirma si una orden se ejecutó, Jev Trader bloquea nuevas
-  entradas y lo registra para que una persona lo revise.
+- **Estado incierto de una orden**: si el exchange no confirma si una orden se ejecutó, o el proceso se cortó
+  mientras la enviaba, Jev Trader bloquea nuevas entradas y lo registra para que una persona lo revise
+  (`jev status --reset-halt` lo libera).
+- **Datos viejos**: si la última vela cerrada tiene más de un timeframe (+2 min) de antigüedad, no se abren
+  posiciones; stops y kill switch se siguen revisando. Stop y take-profit se calculan desde el precio real de
+  la compra, no desde el cierre de la vela.
+- **Una posición por par**: `jev live` no arranca si otra sesión del mismo exchange y par (con otro
+  `JEV_TIMEFRAME`) tiene una posición abierta, para que no quede sin stop.
 - **Spot, solo largo y sin apalancamiento**: SELL solo reduce una posición existente.
 
 ## Configuración
 
 Todo se configura con variables de entorno o con `.env`; las variables del entorno tienen prioridad. Los
-flags de la CLI (`--engine`, `--symbol`, `--timeframe`, `--journal`) pisan esos valores.
+flags de la CLI (`--engine`, `--symbol`, `--timeframe`, `--journal`) pisan esos valores. Los booleanos
+aceptan `true`/`false` (también `1`/`0`, `yes`/`no`, `on`/`off`, `si`); cualquier otro valor es un error
+de configuración, nunca un `false` silencioso.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (vacía) | Clave de la API de Anthropic. Sin clave, el LLM responde HOLD |
 | `JEV_MODEL` | `claude-haiku-4-5` | Modelo de Claude |
-| `JEV_ENGINE` | `hybrid` | `hybrid`, `claude` o `rules` |
+| `JEV_ENGINE` | `hybrid` | `hybrid`, `claude`, `rules` o `jev` |
+| `TYPESAFE_API_KEY` | (vacía) | Clave de TypeSafe AI para el motor `jev`. Sin clave, Jev responde HOLD |
 | `JEV_LLM_TIMEOUT_S` | `8` | Timeout por llamada al LLM, en segundos |
 | `JEV_MAX_LLM_COST_USD_PER_DAY` | `1.0` | Presupuesto diario del LLM (0 lo desactiva) |
 | `JEV_EXCHANGE` | `binance` | Id del exchange en ccxt |
@@ -220,6 +262,7 @@ flags de la CLI (`--engine`, `--symbol`, `--timeframe`, `--journal`) pisan esos 
 | `JEV_LIVE_CONFIRM` | (vacía) | Para mainnet: `YES_I_ACCEPT_REAL_MONEY_RISK` |
 | `JEV_API_KEY` / `JEV_API_SECRET` | (vacías) | Claves del exchange (solo modo live) |
 | `JEV_PAPER_START_CASH` | `1000` | Capital inicial simulado, en moneda quote |
+| `JEV_LIVE_MAX_CAPITAL` | `0` | Live: capital máximo que usa el bot (más su PnL realizado); `0` = todo el saldo libre |
 | `JEV_FEE_PCT` | `0.1` | Comisión por lado, en % |
 | `JEV_SLIPPAGE_PCT` | `0.05` | Slippage simulado por lado, en % |
 | `JEV_RISK_PER_TRADE_PCT` | `1.0` | % de equity que se pierde si salta el stop |
@@ -228,7 +271,7 @@ flags de la CLI (`--engine`, `--symbol`, `--timeframe`, `--journal`) pisan esos 
 | `JEV_MAX_DRAWDOWN_PCT` | `10` | Kill switch por caída desde el pico de equity |
 | `JEV_MAX_TRADES_PER_DAY` | `10` | Fills por día UTC (compras y ventas) a partir de los cuales no se abren posiciones nuevas |
 | `JEV_MIN_CONFIDENCE` | `0.6` | Confianza mínima para comprar (para vender, la mitad) |
-| `JEV_COOLDOWN_CANDLES` | `3` | Velas de espera después de cerrar una posición |
+| `JEV_COOLDOWN_CANDLES` | `3` | Velas cerradas de espera después de cerrar una posición (igual en backtest y en vivo) |
 | `JEV_DEFAULT_STOP_PCT` | `2` | Stop si el motor no propone uno |
 | `JEV_DEFAULT_TAKE_PROFIT_PCT` | `4` | Take-profit si el motor no propone uno |
 | `JEV_MIN_ORDER_NOTIONAL` | `10` | Tamaño mínimo de orden, en moneda quote |
@@ -238,7 +281,7 @@ Variables avanzadas, opcionales:
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `JEV_LLM_MAX_RETRIES` | `1` | Reintentos del cliente de Anthropic |
+| `JEV_LLM_MAX_RETRIES` | `1` | Reintentos rápidos del LLM (espera ≤1 s, dentro del timeout) |
 | `JEV_LLM_MAX_TOKENS` | `400` | Tope de tokens de salida por decisión |
 | `JEV_HYBRID_HEARTBEAT_CANDLES` | `12` | Cada cuántas velas el modo híbrido consulta a Claude sin setup |
 | `JEV_HISTORY_CANDLES` | `200` | Velas de historia por decisión (mínimo 60) |
@@ -264,7 +307,11 @@ Cómo funcionan `paper` y `live`:
 
 - Guardan el estado en el journal después de cada vela y lo reanudan al reiniciar: posición, stops, saldo
   simulado, halts y última vela procesada. `--fresh` ignora el estado guardado en `paper`.
-- **Ctrl+C** (o SIGTERM) detiene el bot guardando el estado.
+- **Ctrl+C** (o SIGTERM) detiene el bot al terminar el paso en curso (una orden en vuelo se registra
+  completa) y guarda el estado; un segundo Ctrl+C fuerza la salida. Si el proceso se corta mientras envía
+  una orden, al reiniciar se bloquean las entradas hasta revisar el exchange.
+- `jev status` suma todas las sesiones del journal (sintético, paper y live); el PnL de cada sesión aparece
+  en "Estado guardado". Usá `--journal` distintos para separarlas.
 
 ## Backtesting sin look-ahead
 
@@ -272,9 +319,10 @@ Cómo funcionan `paper` y `live`:
 - La orden se ejecuta en la **apertura de la vela *i + 1*** a través del `PaperBroker`, con slippage y
   comisiones.
 - Stops y take-profits:
+  - se calculan desde el precio real de entrada (apertura con slippage), igual que en vivo;
   - se revisan en cada vela desde la entrada, con su mínimo y su máximo;
-  - se ejecutan en el nivel, o en la apertura si la vela abrió más allá del stop (el peor de los dos
-    precios).
+  - se ejecutan en el nivel, o en la apertura si la vela abrió más allá del nivel (por debajo del stop o
+    por encima del take-profit).
 - La equity se marca en cada cierre. Kill switch, cooldown y límites diarios usan los timestamps de las
   velas.
 - El backtest usa los mismos `RiskManager`, `Portfolio` y `PaperBroker` que el modo en vivo.
@@ -297,15 +345,15 @@ son sintéticos, no de mercado:**
 
 | Métrica | Valor |
 |---|---|
-| Retorno total | −4,01 % |
+| Retorno total | −3,97 % |
 | Buy & hold (mismo período) | −10,41 % |
-| Máximo drawdown | 4,24 % |
-| Operaciones cerradas | 51 (21,6 % ganadoras, profit factor 0,31) |
-| Comisiones pagadas | 25,14 USDT sobre 1.000 iniciales |
-| Exposición | 16,6 % del tiempo |
+| Máximo drawdown | 4,20 % |
+| Operaciones cerradas | 51 (21,6 % ganadoras, profit factor 0,30) |
+| Comisiones pagadas | 25,15 USDT sobre 1.000 iniciales |
+| Exposición | 16,7 % del tiempo |
 
 La estrategia de reglas **perdió dinero** con esta serie. Perdió menos que buy & hold sobre todo porque
-estuvo invertida solo el 16,6 % del tiempo en un mercado que cayó, no porque tenga ventaja. Los datos sintéticos son un paseo aleatorio con regímenes
+estuvo invertida solo el 16,7 % del tiempo en un mercado que cayó, no porque tenga ventaja. Los datos sintéticos son un paseo aleatorio con regímenes
 y **no tienen un edge explotable**: sirven para probar el sistema de punta a punta, no para evaluar la
 estrategia. Las comisiones y el slippage (~0,3 % por operación completa) se comen cualquier ventaja
 pequeña.
@@ -316,8 +364,8 @@ pequeña.
 .venv/bin/pytest -q
 ```
 
-La suite (~600 tests) corre **offline** en pocos segundos. Usa fakes para el exchange, el broker y el
-cliente de Anthropic, y no hace ninguna llamada de red.
+La suite (~640 tests) corre **offline** en pocos segundos. Usa fakes para el exchange, el broker y los
+clientes de Anthropic y TypeSafe, y no hace ninguna llamada de red.
 
 ## Limitaciones (honestas)
 

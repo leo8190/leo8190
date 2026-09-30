@@ -120,6 +120,7 @@ def holding() -> PortfolioView:
 
 
 def make_engine(client, clock=lambda: T0, **kwargs) -> ClaudeDecisionEngine:
+    kwargs.setdefault("sleep", lambda seconds: None)  # retries never really sleep in tests
     return ClaudeDecisionEngine(client=client, clock_ms=clock, **kwargs)
 
 
@@ -179,9 +180,15 @@ def test_pricing_table_and_unknown_model_is_conservative():
     assert price_for("claude-sonnet-5") == (2.0, 10.0)
     assert price_for("claude-opus-5-5") == (4.0, 20.0)
     assert price_for("claude-haiku-4-5-20251001") == (1.0, 5.0)
-    assert price_for("some-unknown-model") == (5.0, 25.0)
+    # regression: the most expensive current models were billed at the Opus 5 price
+    assert price_for("claude-fable-5") == (10.0, 50.0)
+    assert price_for("claude-fable-5-1") == (10.0, 50.0)
+    assert price_for("claude-mythos-5-1") == (10.0, 50.0)
+    # unknown models cost more than any known one, so the daily budget never under-counts
+    unknown = price_for("some-unknown-model")
+    assert all(unknown[0] >= i and unknown[1] >= o for i, o in PRICING.values())
     engine = make_engine(FakeClient(), model="mystery")
-    assert engine.estimate_cost(usage(1_000_000, 0)) == pytest.approx(5.0)
+    assert engine.estimate_cost(usage(1_000_000, 0)) == pytest.approx(unknown[0])
 
 
 # ----------------------------------------------------------------------------- request shape
@@ -234,7 +241,7 @@ def test_llm_schema_has_no_numeric_constraints():
     ],
 )
 def test_api_errors_fall_back_to_hold(exc, fragment):
-    engine = make_engine(FakeClient(exc))
+    engine = make_engine(FakeClient(exc), max_retries=0)
     d = engine.decide(snapshot(), flat())
     assert d.action is Action.HOLD
     assert d.source == "fallback"
@@ -494,3 +501,49 @@ def test_client_created_on_first_use_with_timeout_and_retries(monkeypatch):
     engine.decide(snapshot(), flat())
     assert created == [{"timeout": 3.5, "max_retries": 0}]
     assert len(fake.messages.calls) == 2
+
+
+# ----------------------------------------------------------------------------- bounded retries
+
+
+def rate_limited(retry_after: str | None) -> anthropic.RateLimitError:
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    return anthropic.RateLimitError("slow down", response=httpx2.Response(429, request=REQ, headers=headers), body=None)
+
+
+def test_retry_after_is_capped_and_retried_once():
+    # regression: the SDK slept for the full server Retry-After (e.g. an hour) inside decide()
+    sleeps: list[float] = []
+    client = FakeClient(rate_limited("3600"), response(llm()))
+    engine = make_engine(client, sleep=sleeps.append)  # max_retries=1 by default
+    d = engine.decide(snapshot(), flat())
+    assert d.source == "claude" and d.action is Action.BUY
+    assert sleeps == [ce.MAX_RETRY_SLEEP_S] and ce.MAX_RETRY_SLEEP_S <= 1.0
+    assert engine.calls == 2 and len(client.messages.calls) == 2
+
+
+def test_retries_stop_after_max_retries_and_fall_back():
+    sleeps: list[float] = []
+    client = FakeClient(rate_limited(None))
+    d = make_engine(client, sleep=sleeps.append, max_retries=2).decide(snapshot(), flat())
+    assert d.source == "fallback" and "rate limited" in d.reasoning
+    assert len(client.messages.calls) == 3 and len(sleeps) == 2 and max(sleeps) <= ce.MAX_RETRY_SLEEP_S
+
+
+def test_non_retryable_errors_and_exhausted_time_budget_are_not_retried():
+    sleeps: list[float] = []
+    client = FakeClient(status_error(anthropic.BadRequestError, 400), response(llm()))
+    assert make_engine(client, sleep=sleeps.append).decide(snapshot(), flat()).source == "fallback"
+    assert len(client.messages.calls) == 1 and sleeps == []
+    # a retry that would not fit in timeout_s is skipped
+    client = FakeClient(rate_limited("1"), response(llm()))
+    engine = make_engine(client, sleep=sleeps.append, timeout_s=0.5)
+    assert engine.decide(snapshot(), flat()).source == "fallback"
+    assert len(client.messages.calls) == 1 and sleeps == []
+
+
+def test_sdk_client_never_retries_on_its_own(monkeypatch):
+    created: list[dict] = []
+    monkeypatch.setattr(ce.anthropic, "Anthropic", lambda **kw: created.append(kw) or FakeClient(response(llm())))
+    ClaudeDecisionEngine(timeout_s=8.0, max_retries=3, clock_ms=lambda: T0).decide(snapshot(), flat())
+    assert created == [{"timeout": 8.0, "max_retries": 0}]

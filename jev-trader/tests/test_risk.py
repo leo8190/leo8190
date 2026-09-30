@@ -138,8 +138,10 @@ def test_protective_exit_gap_below_stop_uses_open():
     r = rm()
     assert r.check_protective_exit(p, low=94.0, high=96.0, open_price=95.0) == ("stop_loss", 95.0)
     assert r.check_protective_exit(p, low=97.0, high=100.0, open_price=99.0) == ("stop_loss", 98.0)
-    # a gap above the take-profit is not credited (conservative)
-    assert r.check_protective_exit(p, low=106.0, high=108.0, open_price=107.0) == ("take_profit", 104.0)
+    # regression: a gap above the take-profit exits at the open (like a market exit), never
+    # below it at a target price that did not trade
+    assert r.check_protective_exit(p, low=106.0, high=108.0, open_price=107.0) == ("take_profit", 107.0)
+    assert r.check_protective_exit(p, low=103.0, high=105.0, open_price=103.5) == ("take_profit", 104.0)
 
 
 def test_protective_exit_without_levels_or_bad_data():
@@ -156,6 +158,7 @@ def test_daily_loss_kill_switch_trips_and_clears_next_day():
     r, p = rm(), portfolio()
     p.mark(T0, 1000.0)
     assert r.update_kill_switch(p, 971.0) is None  # 2.9 %
+    p.mark(T0 + M5, 970.0)
     assert r.update_kill_switch(p, 970.0) == "daily_loss"  # 3.0 % -> trips at the limit
     assert p.halted_reason == "daily_loss" and p.halted_day == p.current_day
     assert r.update_kill_switch(p, 1000.0) == "daily_loss"  # stays for the rest of the day
@@ -164,8 +167,8 @@ def test_daily_loss_kill_switch_trips_and_clears_next_day():
     assert not verdict.approved
     assert any("halted" in reason for reason in verdict.reasons)
 
-    p.mark(T0 + DAY_MS, 970.0)  # new UTC day
-    assert p.halted_reason is None
+    p.mark(T0 + DAY_MS, 970.0)  # new UTC day, starting from the previous day's last equity (970)
+    assert p.halted_reason is None and p.day_start_equity == 970.0
     assert r.update_kill_switch(p, 970.0) is None
     assert r.evaluate(buy_decision(), view(cash=970.0), snap(ts=T0 + DAY_MS), p).approved
 
@@ -181,7 +184,8 @@ def test_drawdown_kill_switch_persists_until_reset():
     r, p = rm(), portfolio()
     p.mark(T0, 1000.0)
     p.mark(T0 + M5, 1100.0)  # peak
-    p.mark(T0 + DAY_MS, 1000.0)  # new day starts at 1000
+    p.mark(T0 + DAY_MS - M5, 1000.0)
+    p.mark(T0 + DAY_MS, 1000.0)  # new day starts at 1000 (last equity of the previous day)
     assert r.update_kill_switch(p, 991.0) is None  # dd 9.9 %, daily 0.9 %
     assert r.update_kill_switch(p, 990.0) == "max_drawdown"  # dd 10 % from 1100
     p.mark(T0 + 2 * DAY_MS, 1200.0)
@@ -524,3 +528,29 @@ def test_protective_exit_flow_with_portfolio_view():
     assert hit == ("stop_loss", 98.0)
     order = r.forced_exit_order(p.view(Balances(cash=0.0, base_qty=1.0), 99.0), hit[0], price=hit[1])
     assert order.quantity == 1.0 and order.reference_price == 98.0
+
+
+# ---------------------------------------------------------------- regressions (money review)
+
+
+def test_partial_sell_leaving_barely_min_notional_sells_everything():
+    # regression money-3: the remainder cleared min notional at the decision close (10.02)
+    # but not at the lower fill price, so it was written off as unmanaged dust
+    p = holding(qty=0.2)
+    verdict = rm().evaluate(sell_decision(size_pct=0.5), view(cash=0.0, base=0.2, price=100.2), snap(price=100.2), p)
+    assert verdict.approved and verdict.order.quantity == pytest.approx(0.2)
+    assert "whole position" in verdict.reasons[0]
+    # a remainder comfortably above the minimum is still a partial exit
+    verdict = rm().evaluate(sell_decision(size_pct=0.5), view(cash=0.0, base=0.3), snap(), holding(qty=0.3))
+    assert verdict.order.quantity == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize("exit_offset", [0, 2_000, 90_000])  # backtest (open), live (close + grace), late fill
+def test_cooldown_blocks_exactly_n_decisions_after_the_exit(exit_offset):
+    # regression money-4 / runtime-6: the live loop (fills stamped close + grace) blocked one
+    # candle more than the backtest (fills stamped at the candle open)
+    r, p = rm(), holding()
+    exit_candle = T0 + 10 * M5
+    exit_position(p, 100.0, exit_candle + exit_offset)
+    blocked = [not r.evaluate(buy_decision(), view(), snap(ts=exit_candle + k * M5), p).approved for k in range(5)]
+    assert blocked == [True, True, True, False, False]  # cooldown_candles=3

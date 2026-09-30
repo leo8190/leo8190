@@ -25,7 +25,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .metrics import PerformanceMetrics, drawdown_curve, format_number, format_pct
+from .metrics import (
+    PerformanceMetrics,
+    drawdown_curve,
+    format_number,
+    format_pct,
+    format_profit_factor,
+    format_sortino,
+)
 from .models import TradeRecord
 
 logger = logging.getLogger(__name__)
@@ -656,14 +663,14 @@ def _return_delta(m: PerformanceMetrics) -> str:
 
 def _tiles(m: PerformanceMetrics) -> str:
     has_trades = m.num_trades > 0
-    pf = "n/d (sin pérdidas)" if m.profit_factor is None else format_number(m.profit_factor)
+    pf = format_profit_factor(m)
     trade_sub = f"Media {format_pct(m.avg_trade_pct, signed=True)}" if has_trades else "Sin operaciones cerradas"
     if m.exposure_pct is not None:
         trade_sub += f" · exposición {format_pct(m.exposure_pct, 1)}"
     tiles = [
         _tile("Retorno total", format_pct(m.total_return_pct, signed=True), _return_delta(m)),
         _tile("Máx. drawdown", format_pct(m.max_drawdown_pct), "<span>Caída desde el máximo</span>"),
-        _tile("Sharpe", format_number(m.sharpe), f"<span>{_esc('Sortino ' + format_number(m.sortino))} · anualizados</span>"),
+        _tile("Sharpe", format_number(m.sharpe), f"<span>{_esc('Sortino ' + format_sortino(m))} · anualizados</span>"),
         _tile(
             "Tasa de acierto",
             format_pct(m.win_rate_pct, 1) if has_trades else "n/d",

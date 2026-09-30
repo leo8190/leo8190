@@ -155,3 +155,10 @@ def test_write_report_creates_parent_dirs(tmp_path) -> None:
     target = tmp_path / "a" / "b" / "report.html"
     out = write_report(target, _render())
     assert out == target and target.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+
+
+def test_report_shows_unbounded_sortino_as_nd() -> None:
+    # regression money-6: a curve with no downside showed "Sortino 0,00"
+    equity = [(T0 + i * HOUR, 1000.0 + i) for i in range(20)]
+    doc = _render(equity=equity, trades=[])
+    assert "Sortino n/d (sin caídas)" in doc and "Sortino 0,00" not in doc

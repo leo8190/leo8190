@@ -44,3 +44,35 @@ def test_env_example_loads_as_is(tmp_path, monkeypatch):
 def test_settings_validation_still_applies(tmp_path):
     with pytest.raises(ConfigError):
         load_settings(env={"JEV_ENGINE": "hybrid # oops"})
+
+
+@pytest.mark.parametrize("value", ["si", "sí", "ture", "enabled", "yes please"])
+def test_unrecognized_booleans_are_rejected_not_false(value):
+    # regression safety-7 / runtime-4: a typo silently meant False (mainnet / no flatten)
+    if value in ("si", "sí"):
+        s = load_settings(env={"JEV_USE_TESTNET": value, "JEV_FLATTEN_ON_KILL": value})
+        assert s.use_testnet is True and s.risk.flatten_on_kill is True
+        return
+    for var in ("JEV_USE_TESTNET", "JEV_FLATTEN_ON_KILL"):
+        with pytest.raises(ConfigError, match=var):
+            load_settings(env={var: value})
+
+
+def test_known_booleans_and_live_max_capital():
+    s = load_settings(env={"JEV_USE_TESTNET": "FALSE", "JEV_MODE": "paper", "JEV_FLATTEN_ON_KILL": "0",
+                           "JEV_LIVE_MAX_CAPITAL": "250"})
+    assert s.use_testnet is False and s.risk.flatten_on_kill is False and s.live_max_capital == 250.0
+    assert load_settings(env={}).live_max_capital == 0.0
+    with pytest.raises(ConfigError, match="JEV_LIVE_MAX_CAPITAL"):
+        load_settings(env={"JEV_LIVE_MAX_CAPITAL": "-5"})
+
+
+def test_jev_engine_is_selectable():
+    # regression runtime-9: JEV_ENGINE=jev was a configuration error
+    from jev.brain.factory import build_engine
+    from jev.brain.jev_engine import JevDecisionEngine
+
+    s = load_settings(env={"JEV_ENGINE": "jev", "JEV_MAX_POSITION_PCT": "40"})
+    engine = build_engine(s)
+    assert isinstance(engine, JevDecisionEngine) and engine.max_position_pct == 40.0
+    assert engine.round_trip_cost_pct == pytest.approx(2 * (s.fee_pct + s.slippage_pct))

@@ -160,7 +160,8 @@ def test_stop_is_checked_on_the_entry_candle_and_uses_the_paper_broker_slippage(
     buy_fill, sell_fill = result.fills
     assert buy_fill.price == pytest.approx(100.0 * 1.0005)
     assert sell_fill.timestamp == candles[10].timestamp
-    assert sell_fill.price == pytest.approx(98.0 * 0.9995)
+    # the 2 % stop is anchored to the real entry (100.05 with slippage), not the decision close
+    assert sell_fill.price == pytest.approx(98.0 * 1.0005 * 0.9995)
     assert sell_fill.fee == pytest.approx(sell_fill.quantity * sell_fill.price * 0.001)
 
 
@@ -283,3 +284,34 @@ def test_progress_callback_reaches_the_end():
     seen = []
     run_backtest(flat(100), settings(), RulesDecisionEngine(), warmup=10, progress=lambda d, t: seen.append((d, t)))
     assert seen[-1] == (91, 91) and len(seen) <= 22
+
+
+def test_entry_gapping_over_the_target_is_not_a_losing_take_profit():
+    # regression money-5: close 100 -> tp 104, next open 106: the backtest bought at 106 and
+    # "took profit" at 104 on the same candle (a price that never traded)
+    result, _, _ = entry_then(candle(10, 107.0, low=105.0, high=108.0, open_=106.0))
+    assert result.fills[0].price == pytest.approx(106.0)
+    assert not any(t.exit_reason == "take_profit" and t.pnl < 0 for t in result.trades)
+
+
+def test_take_profit_gap_on_a_later_candle_fills_at_the_better_open():
+    result, _, _ = entry_then(candle(10, 100.0), candle(11, 107.0, low=106.5, high=108.0, open_=107.0))
+    trade = result.trades[0]
+    assert trade.exit_reason == "take_profit" and trade.exit_price == pytest.approx(107.0)
+
+
+def test_daily_loss_kill_switch_works_on_1d_candles():
+    # regression money-2: with 1d candles every mark started a new day, so the daily-loss
+    # switch never tripped (here: -1.3 % of the account per day against a 1 % limit)
+    day = 86_400_000
+    t0 = 1_767_225_600_000
+    candles = [Candle(timestamp=t0 + i * day, open=100.0, high=100.0, low=100.0, close=100.0, volume=1.0)
+               for i in range(10)]
+    candles += [Candle(timestamp=t0 + (10 + i) * day, open=p, high=p, low=p, close=p, volume=1.0)
+                for i, p in enumerate([100.0, 96.0, 92.0, 88.0])]
+    cfg = Settings(engine="rules", timeframe="1d", fee_pct=0.0, slippage_pct=0.0, history_candles=60,
+                   risk=RiskConfig(cooldown_candles=0, risk_per_trade_pct=5.0, max_position_pct=100.0,
+                                   max_daily_loss_pct=1.0, max_drawdown_pct=90.0, max_stop_pct=50.0))
+    result = run_backtest(candles, cfg, Spy({0: buy(stop=15.0, tp=100.0)}), warmup=10)
+    assert any("daily_loss" in w for w in result.warnings)
+    assert result.trades and result.trades[0].exit_reason == "kill_switch:daily_loss"

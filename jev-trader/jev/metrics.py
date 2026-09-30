@@ -24,7 +24,7 @@ class PerformanceMetrics(BaseModel):
     buy_and_hold_return_pct: float | None = None
     max_drawdown_pct: float = 0.0  # positive number: 12.5 means a 12.5 % peak-to-trough loss
     sharpe: float = 0.0
-    sortino: float = 0.0
+    sortino: float | None = 0.0  # None: positive returns with no downside at all (unbounded)
     num_trades: int = 0
     win_rate_pct: float = 0.0
     profit_factor: float | None = None  # None when there are no losing trades
@@ -89,7 +89,7 @@ def drawdown_curve(
     return out
 
 
-def _annualized_ratio(returns: list[float], ppy: float, downside: bool) -> float:
+def _annualized_ratio(returns: list[float], ppy: float, downside: bool) -> float | None:
     if len(returns) < 2:
         return 0.0
     mean = statistics.fmean(returns)
@@ -98,17 +98,19 @@ def _annualized_ratio(returns: list[float], ppy: float, downside: bool) -> float
     else:
         denom = statistics.stdev(returns)
     if denom <= 1e-15 or not math.isfinite(denom):
-        return 0.0
+        # Sortino with gains and no downside is unbounded, not 0 (the best case, not a flat one).
+        return None if downside and mean > 0 else 0.0
     return mean / denom * math.sqrt(ppy)
 
 
 def sharpe_ratio(returns: list[float], ppy: float) -> float:
     """Annualized Sharpe (rf = 0, sample stdev). 0.0 if < 2 returns or zero stdev."""
-    return _annualized_ratio(returns, ppy, downside=False)
+    return _annualized_ratio(returns, ppy, downside=False) or 0.0
 
 
-def sortino_ratio(returns: list[float], ppy: float) -> float:
-    """Annualized Sortino (target 0). 0.0 if < 2 returns or no downside deviation."""
+def sortino_ratio(returns: list[float], ppy: float) -> float | None:
+    """Annualized Sortino (target 0). 0.0 if < 2 returns or no return at all; None when
+    there are gains but no downside deviation (unbounded: shown as "n/d (sin caídas)")."""
     return _annualized_ratio(returns, ppy, downside=True)
 
 
@@ -203,8 +205,18 @@ def compute_metrics(
     )
 
 
+def format_profit_factor(m: PerformanceMetrics) -> str:
+    if m.num_trades == 0:
+        return "n/d (sin operaciones)"
+    return "n/d (sin pérdidas)" if m.profit_factor is None else format_number(m.profit_factor)
+
+
+def format_sortino(m: PerformanceMetrics) -> str:
+    return "n/d (sin caídas)" if m.sortino is None else format_number(m.sortino)
+
+
 def _summary_rows(m: PerformanceMetrics) -> list[tuple[str, str]]:
-    pf = "n/d (sin pérdidas)" if m.profit_factor is None else format_number(m.profit_factor)
+    pf = format_profit_factor(m)
     return [
         ("Equity inicial", format_number(m.start_equity)),
         ("Equity final", format_number(m.end_equity)),
@@ -212,7 +224,7 @@ def _summary_rows(m: PerformanceMetrics) -> list[tuple[str, str]]:
         ("Buy & hold", format_pct(m.buy_and_hold_return_pct, signed=True)),
         ("Máx. drawdown", format_pct(m.max_drawdown_pct)),
         ("Sharpe (anual.)", format_number(m.sharpe)),
-        ("Sortino (anual.)", format_number(m.sortino)),
+        ("Sortino (anual.)", format_sortino(m)),
         ("Operaciones", str(m.num_trades)),
         ("Tasa de acierto", format_pct(m.win_rate_pct)),
         ("Profit factor", pf),

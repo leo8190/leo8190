@@ -571,3 +571,29 @@ def test_ccxt_injected_exchange_is_used_as_is() -> None:
     fake = FakeExchange()
     market = CcxtMarket(exchange=fake, use_testnet=True)
     assert market.exchange is fake
+
+
+def test_ccxt_closed_candles_use_the_exchange_clock_when_local_runs_ahead() -> None:
+    # regression runtime-7: with the local clock 3 s ahead, the loop woke at local close + 2 s
+    # and took the candle still forming on the exchange for a closed one
+    class TimedExchange(FakeExchange):
+        def __init__(self, rows, server_now):
+            super().__init__(rows)
+            self.has["fetchTime"] = True
+            self.server_now = server_now
+            self.time_calls = 0
+
+        def fetch_time(self):
+            self.time_calls += 1
+            return self.server_now
+
+    close = T0 + 11 * M5  # candle 10 closes here; the exchange is 1 s before it
+    fake = TimedExchange(ohlcv(11), server_now=close - 1_000)
+    market = make_market(fake, now=close + 2_000)  # local clock 3 s ahead
+    got = market.fetch_candles("BTC/USDT", "5m", 5)
+    assert got[-1].timestamp == T0 + 9 * M5  # the forming candle 10 is dropped
+    market.fetch_candles("BTC/USDT", "5m", 5)
+    assert fake.time_calls == 1  # re-synced at most hourly, not on every fetch
+    # without server time support the local clock is used as before
+    plain = make_market(FakeExchange(ohlcv(11)), now=close + 2_000)
+    assert plain.fetch_candles("BTC/USDT", "5m", 5)[-1].timestamp == T0 + 10 * M5

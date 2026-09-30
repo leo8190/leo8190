@@ -248,10 +248,12 @@ def test_day_rollover_resets_counters_and_day_start():
     p.mark(next_day, 940.0)
     assert p.current_day == utc_day(next_day)
     assert p.trades_today == 0
-    assert p.day_start_equity == 940.0
+    # the day starts from the last equity before midnight, so the candle that closes at
+    # 00:00 (950 -> 940) counts toward the new day's loss
+    assert p.day_start_equity == 950.0
     p.mark(next_day + M5, 930.0)
-    assert p.day_start_equity == 940.0  # only the first mark of the day sets it
-    assert p.daily_pnl_pct(930.0) == pytest.approx(10 / 940 * 100)
+    assert p.day_start_equity == 950.0
+    assert p.daily_pnl_pct(930.0) == pytest.approx(20 / 950 * 100)
 
 
 def test_fill_rolls_the_day_and_next_mark_sets_day_start():
@@ -262,9 +264,9 @@ def test_fill_rolls_the_day_and_next_mark_sets_day_start():
     sell(p, 1.0, 100.0, 0.0, ts=next_day)
     assert p.current_day == utc_day(next_day)
     assert p.trades_today == 1  # counter restarted with the new day's fill
-    assert p.day_start_equity is None
+    assert p.day_start_equity == 1000.0  # last equity of the previous day
     p.mark(next_day, 999.0)
-    assert p.day_start_equity == 999.0
+    assert p.day_start_equity == 1000.0
 
 
 def test_older_timestamps_do_not_roll_back_the_day():
@@ -387,3 +389,90 @@ def test_from_state_rejects_unknown_version():
     state["version"] = 999
     with pytest.raises(ValueError, match="version"):
         Portfolio.from_state(state)
+
+
+# ---------------------------------------------------------------- regressions (money / safety review)
+
+
+def test_daily_loss_counts_the_candle_closing_at_midnight_and_1d_candles():
+    # regression money-2: the first mark of a day used to become the day start, so the move
+    # of the candle closing at 00:00 UTC (every candle on 1d) never counted as a daily loss
+    p = make_portfolio()
+    p.mark(T0 + DAY_MS - M5, 1000.0)  # 23:55
+    p.mark(T0 + DAY_MS, 900.0)  # the candle closing at 00:00 crashed
+    assert p.day_start_equity == 1000.0 and p.daily_pnl_pct(900.0) == pytest.approx(10.0)
+    daily = make_portfolio()  # 1d timeframe: one mark per day
+    for day, equity in enumerate([1000.0, 950.0, 902.5]):
+        daily.mark(T0 + day * DAY_MS, equity)
+    assert daily.daily_pnl_pct(902.5) == pytest.approx(5.0)
+    # after a gap of several days the first mark of the day starts it (no stale baseline)
+    daily.mark(T0 + 10 * DAY_MS, 800.0)
+    assert daily.day_start_equity == 800.0
+
+
+def test_external_withdrawal_and_deposit_move_the_baselines_not_the_pnl():
+    # regression money-1 / safety-1 / runtime-2: live equity is the account's free cash, so
+    # moving funds looked like trading PnL (a withdrawal tripped the drawdown switch)
+    p = make_portfolio()
+    assert p.observe_balances(T0, 1000.0, 0.0, 100.0) == 0.0  # first observation: baseline
+    p.mark(T0, 1000.0)
+    buy(p, 2.5, 100.0, 0.25, ts=T0 + M5)
+    assert p.observe_balances(T0 + M5, 749.75, 2.5, 100.0) == 0.0  # explained by the fill
+    p.mark(T0 + M5, 999.75)
+    assert p.observe_balances(T0 + 2 * M5, 639.75, 2.5, 100.0) == pytest.approx(-110.0)  # withdrawal
+    p.mark(T0 + 2 * M5, 889.75)
+    assert p.drawdown_pct(889.75) == pytest.approx(0.25 / 890 * 100)  # only the fee, not the -110
+    assert p.daily_pnl_pct(889.75) == pytest.approx(0.25 / 890 * 100)
+    # deposit of 60 while the position really loses 5 % of the account: the loss stays visible
+    flow = p.observe_balances(T0 + 3 * M5, 699.75, 2.5, 80.0)
+    assert flow == pytest.approx(60.0)
+    p.mark(T0 + 3 * M5, 899.75)
+    # day start 1000 - 110 + 60 = 950; the 50 lost on the position (+ fee) is a 5.3 % daily loss
+    assert p.daily_pnl_pct(899.75) == pytest.approx((950.0 - 899.75) / 950.0 * 100)
+    # a manual sale of managed coins at the market is neither a flow nor a loss
+    assert p.observe_balances(T0 + 4 * M5, 699.75 + 80.0, 1.5, 80.0) == pytest.approx(0.0)
+    # tiny differences (fees paid in another coin) are ignored
+    assert p.observe_balances(T0 + 5 * M5, 779.75 + 0.1, 1.5, 80.0) == 0.0
+
+
+def test_unsellable_remainder_is_carried_into_the_next_position():
+    # regression safety-4 / money-3: a remainder below the minimum order (lot-size truncation
+    # after a base-coin fee) was written off: stranded coins and PnL that did not match equity
+    p = make_portfolio(dust_notional=10.0)
+    buy(p, 0.0024975, 100_000.0, 0.25, ts=T0)  # 0.0025 filled, 0.0000025 BTC fee
+    first = sell(p, 0.00249, 99_800.0, 0.2485, ts=T0 + M5)  # truncated to the 1e-5 step
+    assert not p.in_position and p.stop_loss is None
+    assert p.carry_qty == pytest.approx(0.0000075)
+    assert p.carry_cost == pytest.approx(0.0000075 * first.entry_price)
+    assert p.capital_in_use == pytest.approx(p.carry_cost)
+    buy(p, 0.0024975, 100_000.0, 0.25, ts=T0 + 2 * M5)
+    assert p.qty == pytest.approx(0.002505) and p.carry_qty == 0.0
+    sell(p, 0.002505, 100_000.0, 0.25, ts=T0 + 3 * M5)
+    # every coin bought was sold: realized PnL equals the net cash flow
+    spent = 2 * (0.0024975 * 100_000.0 + 0.25)
+    received = 0.00249 * 99_800.0 - 0.2485 + 0.002505 * 100_000.0 - 0.25
+    assert p.realized_pnl == pytest.approx(received - spent)
+
+
+def test_reconcile_charges_written_off_cost_to_realized_pnl():
+    p = make_portfolio()
+    buy(p, 1.0, 100.0, 1.0)
+    p.reconcile(0.75, T0 + M5)
+    assert p.realized_pnl == pytest.approx(-0.25 * 101.0)
+    carried = make_portfolio(dust_notional=10.0)
+    buy(carried, 1.0, 100.0, 0.0)
+    sell(carried, 0.95, 100.0, 0.0)  # 0.05 left, below the 10 notional: carried
+    assert carried.reconcile(0.0, T0 + M5) == pytest.approx(0.05)
+    assert carried.carry_qty == 0.0 and carried.realized_pnl == pytest.approx(-5.0)
+
+
+def test_state_can_keep_only_the_last_equity_points():
+    # regression runtime-8: the live loop re-serialized the whole equity curve every candle
+    p = make_portfolio()
+    for i in range(100):
+        p.mark(T0 + i * M5, 1000.0 + i)
+    state = p.to_state(equity_points=1)
+    assert state["equity_curve"] == [[T0 + 99 * M5, 1099.0]]
+    restored = Portfolio.from_state(state)
+    assert restored.last_equity == 1099.0 and restored.equity_peak == 1099.0
+    assert len(p.to_state()["equity_curve"]) == 100

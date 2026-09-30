@@ -32,6 +32,7 @@ LLM_COST_CONFIRM_USD = 1.0  # a Claude backtest above this worst case needs --ye
 TYPICAL_OUTPUT_TOKENS = 150
 SCHEMA_OVERHEAD_TOKENS = 400  # structured-output schema + formatting, rough and conservative
 CHARS_PER_TOKEN = 3  # conservative (real ratio is closer to 3.5-4 for this prompt)
+JEV_QUESTIONS_TOKENS = 800  # Jev's typed questions (instructions + criteria), rough and conservative
 
 
 class UsageError(Exception):
@@ -56,12 +57,59 @@ class _StderrHandler(logging.StreamHandler):
         pass
 
 
+class _SecretFilter(logging.Filter):
+    """Replaces known secrets (API keys) with *** in every record the CLI prints.
+
+    Library debug logs (``-vv``) can include request headers, e.g. ccxt logs the
+    exchange API key header; this keeps the "secrets are never printed" promise.
+    """
+
+    MIN_LENGTH = 6
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.secrets: set[str] = set()
+
+    def add(self, *secrets: str | None) -> None:
+        self.secrets.update(s for s in secrets if s and len(s) >= self.MIN_LENGTH)
+
+    def _redact(self, text: str) -> str:
+        for secret in self.secrets:
+            text = text.replace(secret, "***")
+        return text
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not self.secrets:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:  # a broken format string: let the handler report it
+            return True
+        redacted = self._redact(message)
+        if redacted != message:
+            record.msg, record.args = redacted, None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = self._redact(record.exc_text)
+        return True
+
+
+_SECRET_FILTER = _SecretFilter()
+_API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "TYPESAFE_API_KEY")
+
+
+def _protect_secrets(settings: Settings) -> None:
+    _SECRET_FILTER.add(settings.api_key, settings.api_secret, *(os.environ.get(var) for var in _API_KEY_VARS))
+
+
 def _configure_logging(verbosity: int) -> None:
     level = logging.WARNING if verbosity <= 0 else logging.INFO if verbosity == 1 else logging.DEBUG
     root = logging.getLogger()
     if not any(isinstance(h, _StderrHandler) for h in root.handlers):
         handler = _StderrHandler()
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S"))
+        handler.addFilter(_SECRET_FILTER)
         root.addHandler(handler)
     root.setLevel(level)
     for noisy in ("httpx", "httpcore", "anthropic", "ccxt", "urllib3"):
@@ -86,13 +134,14 @@ def _iso(ts: int | None) -> str:
     return iso_utc(ts)
 
 
-def _export_anthropic_key(env_file: str | None) -> None:
-    """Make ANTHROPIC_API_KEY from .env visible to the Anthropic SDK (it only reads os.environ)."""
-    if os.environ.get("ANTHROPIC_API_KEY") or not env_file:
+def _export_api_keys(env_file: str | None) -> None:
+    """Make ANTHROPIC_API_KEY / TYPESAFE_API_KEY from .env visible to the SDKs (they only read os.environ)."""
+    if not env_file:
         return
-    key = load_dotenv(env_file).get("ANTHROPIC_API_KEY")
-    if key:
-        os.environ["ANTHROPIC_API_KEY"] = key
+    values = load_dotenv(env_file)
+    for var in ("ANTHROPIC_API_KEY", "TYPESAFE_API_KEY"):
+        if not os.environ.get(var) and values.get(var):
+            os.environ[var] = values[var]
 
 
 def _has_anthropic_credentials() -> bool:
@@ -127,6 +176,14 @@ def _flat_view(settings: Settings) -> PortfolioView:
 
 
 def _warn_missing_llm_key(settings: Settings) -> None:
+    if settings.engine == "jev":
+        if not os.environ.get("TYPESAFE_API_KEY"):
+            print(
+                "Aviso: TYPESAFE_API_KEY no está configurada; cada consulta a Jev devolverá HOLD "
+                "(fallback seguro). Usá --engine rules o configurá la clave en .env.",
+                file=sys.stderr,
+            )
+        return
     if settings.engine != "rules" and not _has_anthropic_credentials():
         print(
             "Aviso: ANTHROPIC_API_KEY no está configurada; cada consulta a Claude devolverá HOLD "
@@ -203,11 +260,21 @@ def _backtest_candles(args: argparse.Namespace, settings: Settings) -> tuple[lis
 
 
 def _llm_cost_per_call(settings: Settings, candles: Sequence[Candle]) -> tuple[float, float]:
-    """(typical, worst case) USD per Claude call, from a real prompt of this data set."""
-    from .brain.claude_engine import SYSTEM_PROMPT, format_prompt, price_for
+    """(typical, worst case) USD per LLM call, from a real prompt of this data set."""
     from .features import build_snapshot
 
     snapshot = build_snapshot(settings.symbol, settings.timeframe, candles[: settings.history_candles])
+    if settings.engine == "jev":
+        import json
+
+        from .brain.jev_engine import DEFAULT_PRICE_PER_MTOK_INPUT, build_state
+
+        state = build_state(snapshot, _flat_view(settings), 2.0 * (settings.fee_pct + settings.slippage_pct))
+        in_tokens = len(json.dumps(state)) / CHARS_PER_TOKEN + JEV_QUESTIONS_TOKENS
+        cost = in_tokens * DEFAULT_PRICE_PER_MTOK_INPUT / 1_000_000  # Jev output tokens are free
+        return cost, cost
+    from .brain.claude_engine import SYSTEM_PROMPT, format_prompt, price_for
+
     prompt = format_prompt(snapshot, _flat_view(settings))
     in_tokens = (len(SYSTEM_PROMPT) + len(prompt)) / CHARS_PER_TOKEN + SCHEMA_OVERHEAD_TOKENS
     in_price, out_price = price_for(settings.model)
@@ -229,7 +296,7 @@ def _settings_summary(
         "Motor": settings.engine,
     }
     if settings.engine != "rules":
-        summary["Modelo"] = settings.model
+        summary["Modelo"] = "jev-latest (TypeSafe)" if settings.engine == "jev" else settings.model
         summary["Máx. llamadas LLM"] = str(max_llm_calls)
         summary["Heartbeat híbrido (velas)"] = str(settings.hybrid_heartbeat_candles)
     summary.update({
@@ -268,7 +335,8 @@ def cmd_backtest(args: argparse.Namespace, settings: Settings) -> int:
     if uses_llm:
         typical, worst = _llm_cost_per_call(settings, candles)
         calls = min(max_calls or 0, len(candles) - args.warmup)
-        print(f"Coste LLM estimado ({settings.model}): hasta {calls} llamadas · típico ~US${typical * calls:.2f}, "
+        model = "jev-latest" if settings.engine == "jev" else settings.model
+        print(f"Coste LLM estimado ({model}): hasta {calls} llamadas · típico ~US${typical * calls:.2f}, "
               f"peor caso ~US${worst * calls:.2f} (US${typical:.4f}-{worst:.4f} por llamada). "
               f"El presupuesto diario (US${settings.max_llm_cost_usd_per_day:.2f}) también limita el gasto real.")
         if worst * calls > LLM_COST_CONFIRM_USD and not args.yes:
@@ -419,18 +487,33 @@ def _tick_printer(settings: Settings, totals: dict[str, float]) -> Any:
     return on_tick
 
 
+def _graceful_sigint(engine: Any) -> Any:
+    """First Ctrl+C: stop after the current step (an order in flight is still booked and
+    journaled). A second Ctrl+C forces the exit (KeyboardInterrupt)."""
+
+    def handler(*_: Any) -> None:
+        if engine.stopping:
+            raise KeyboardInterrupt
+        print("\nCtrl+C: el bot se detiene al terminar el paso en curso (Ctrl+C otra vez para forzar).",
+              file=sys.stderr)
+        engine.stop()
+
+    return handler
+
+
 def _run_engine(engine: Any, **kwargs: Any) -> None:
-    """``engine.run_forever`` with SIGTERM mapped to a graceful stop (restored afterwards)."""
-    previous = None
-    try:
-        previous = signal.signal(signal.SIGTERM, lambda *_: engine.stop())
-    except (ValueError, OSError):  # not in the main thread / unsupported platform
-        pass
+    """``engine.run_forever`` with SIGTERM and Ctrl+C mapped to a graceful stop (restored afterwards)."""
+    previous: dict[int, Any] = {}
+    for sig, handler in ((signal.SIGTERM, lambda *_: engine.stop()), (signal.SIGINT, _graceful_sigint(engine))):
+        try:
+            previous[sig] = signal.signal(sig, handler)
+        except (ValueError, OSError):  # not in the main thread / unsupported platform
+            pass
     try:
         engine.run_forever(**kwargs)
     finally:
-        if previous is not None:
-            signal.signal(signal.SIGTERM, previous)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def _print_session_end(engine: Any, totals: dict[str, float]) -> None:
@@ -524,9 +607,13 @@ def cmd_live(args: argparse.Namespace, settings: Settings) -> int:
     from .portfolio import Portfolio
 
     network = "TESTNET (fondos de prueba)" if settings.use_testnet else "MAINNET — DINERO REAL"
+    capital = (f"capital máximo {_fmt(settings.live_max_capital)} {settings.quote_currency} (JEV_LIVE_MAX_CAPITAL)"
+               if settings.live_max_capital > 0 else
+               f"usa TODO el {settings.quote_currency} libre de la cuenta (limitalo con JEV_LIVE_MAX_CAPITAL)")
     bar = "=" * 72
     print(f"{bar}\n  Jev Trader LIVE · órdenes REALES en {settings.exchange} {network}\n"
           f"  {settings.symbol} {settings.timeframe} · motor {settings.engine} · journal {settings.journal_path}\n"
+          f"  {capital}\n"
           f"  Usá claves SIN permiso de retiro y con whitelist de IP. Ctrl+C detiene y guarda el estado.\n{bar}")
     allow_mainnet = False
     if not settings.use_testnet:
@@ -550,18 +637,58 @@ def cmd_live(args: argparse.Namespace, settings: Settings) -> int:
     net_label = "testnet" if settings.use_testnet else "mainnet"
     journal = Journal(settings.journal_path)
     try:
+        session = f"live:{net_label}:{settings.exchange}:{settings.symbol}:"
+        orphaned = _open_positions_elsewhere(journal, f"engine:{session}", f"engine:{session}{settings.timeframe}")
+        if orphaned:
+            print(
+                f"Hay una posición abierta guardada en otra sesión live ({', '.join(orphaned)}): con este "
+                f"timeframe ({settings.timeframe}) el bot no la vería y quedaría sin stop. Volvé a correr con el "
+                "JEV_TIMEFRAME de esa sesión hasta cerrarla (si ya la cerraste a mano, la reconciliación la da "
+                "por cerrada al arrancar).",
+                file=sys.stderr,
+            )
+            return EXIT_CONFIG
         engine = TradingEngine(
             settings, market, broker, build_engine(settings), journal, portfolio=portfolio,
-            state_key=f"live:{net_label}:{settings.exchange}:{settings.symbol}:{settings.timeframe}",
+            state_key=f"{session}{settings.timeframe}", max_capital=settings.live_max_capital,
         )
         if engine.restore_state():
             print("Estado anterior reanudado.")
+        _warn_unmanaged_coins(engine, market, settings)
         totals = {"steps": 0.0, "llm_cost": 0.0}
         _run_engine(engine, max_iterations=args.max_iterations, on_tick=_tick_printer(settings, totals))
         _print_session_end(engine, totals)
     finally:
         journal.close()
     return EXIT_OK
+
+
+def _open_positions_elsewhere(journal: Any, prefix: str, current_key: str) -> list[str]:
+    """Saved live states for the same exchange/symbol (other timeframe) that hold a position."""
+    from .portfolio import Portfolio
+
+    found = []
+    for key in journal.state_keys(prefix):
+        raw = (journal.load_state(key) or {}).get("portfolio")
+        if key != current_key and raw and Portfolio.from_state(raw).in_position:
+            found.append(key.removeprefix("engine:"))
+    return found
+
+
+def _warn_unmanaged_coins(engine: Any, market: Any, settings: Settings) -> None:
+    """Coins in the account the bot does not manage have no stop: say so at start."""
+    try:
+        base = engine.broker.balances().base_qty
+        price = market.fetch_last_price(settings.symbol)
+    except JevError as exc:
+        logger.warning("could not check for unmanaged coins: %s", exc)
+        return
+    p = engine.portfolio
+    extra = base - (p.qty if p.in_position else p.carry_qty)
+    if extra * price >= settings.risk.min_order_notional:
+        print(f"Aviso: la cuenta tiene {extra:.8g} {settings.base_currency} (~{_fmt(extra * price)} "
+              f"{settings.quote_currency}) que el bot NO gestiona: sin stop ni take-profit. Pueden ser fondos "
+              "previos (la testnet trae saldo inicial) o una posición de otra sesión/journal.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------- download / status
@@ -628,7 +755,11 @@ def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Operaciones  {s['trades']} (ganadoras {s['winning_trades']}) · PnL realizado "
               f"{_fmt(s['realized_pnl'], 2, signed=True)}")
         print(f"Eventos      {s['events']}")
-        if journal.state_keys("engine:"):
+        sessions = journal.state_keys("engine:")
+        if len(sessions) > 1:
+            print("Nota: los totales de arriba suman TODAS las sesiones de este journal (sintético, paper y live); "
+                  "el PnL de cada una está en 'Estado guardado'. Usá --journal distintos para separarlas.")
+        if sessions:
             print("Estado guardado:")
             _print_states(journal, args.reset_halt, settings)
         decisions = journal.recent_decisions(args.limit)
@@ -658,7 +789,8 @@ def _common(parser: argparse.ArgumentParser, *, market: bool = True, engine: boo
         parser.add_argument("--symbol", help="par BASE/QUOTE (por defecto JEV_SYMBOL)")
         parser.add_argument("--timeframe", help="p. ej. 1m, 5m, 1h (por defecto JEV_TIMEFRAME)")
     if engine:
-        parser.add_argument("--engine", choices=("rules", "hybrid", "claude"), help="motor (por defecto JEV_ENGINE)")
+        parser.add_argument("--engine", choices=("rules", "hybrid", "claude", "jev"),
+                            help="motor (por defecto JEV_ENGINE)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -734,8 +866,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exc.code if isinstance(exc.code, int) else EXIT_CONFIG
     _configure_logging(args.verbose)
     try:
-        _export_anthropic_key(args.env_file)
+        _export_api_keys(args.env_file)
         settings = _load_settings(args)
+        _protect_secrets(settings)
         return args.handler(args, settings)
     except (ConfigError, UsageError) as exc:
         print(f"Error de configuración: {exc}", file=sys.stderr)

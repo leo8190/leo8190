@@ -32,6 +32,7 @@ from .journal import Journal
 from .market.base import MarketDataSource
 from .market.timeframes import floor_to_timeframe, timeframe_to_ms
 from .models import (
+    Balances,
     Candle,
     Decision,
     Fill,
@@ -43,6 +44,7 @@ from .models import (
     OrderRequest,
     PortfolioView,
     RiskVerdict,
+    Side,
     TradeRecord,
 )
 from .portfolio import Portfolio
@@ -54,6 +56,10 @@ STATE_VERSION = 1
 ORDER_STATE_UNKNOWN = "order_state_unknown"  # halt reason: a human must check the exchange
 KILL_REASONS = (DAILY_LOSS, MAX_DRAWDOWN)
 MAX_CONSECUTIVE_ERRORS = 5
+# The newest closed candle may be this late (beyond one timeframe) before new entries
+# are skipped: an exchange whose klines stall must not trigger trades on old prices.
+STALE_GRACE_MS = 120_000
+SAVED_EQUITY_POINTS = 1  # the equity history lives in the journal's equity table
 
 _EVENT_LEVELS = {  # log level per journal event kind (default WARNING)
     "start": logging.INFO,
@@ -98,15 +104,31 @@ def execute_order(
     """Send ``order`` to ``broker`` and book the fill (shared by live loop and backtest).
 
     The fill is journaled before it is booked, so a booking error never loses a real
-    fill. Broker errors (InsufficientFundsError, OrderRejectedError) propagate.
+    fill; a journal error never stops the booking either. A BUY's stop-loss and
+    take-profit keep their distance in % but are moved from ``order.reference_price``
+    (the decision close) to the real fill price. Broker errors (InsufficientFundsError,
+    OrderRejectedError) propagate.
     """
     fill = broker.execute(order, market_price, timestamp)
-    if journal is not None:
-        journal.record_fill(fill, order.reason)
+    _journal_safely(journal, "record_fill", fill, order.reason)
+    if order.side is Side.BUY and order.reference_price > 0:
+        scale = fill.price / order.reference_price
+        stop_loss = None if stop_loss is None else stop_loss * scale
+        take_profit = None if take_profit is None else take_profit * scale
     trade = portfolio.apply_fill(fill, stop_loss=stop_loss, take_profit=take_profit, reason=exit_reason)
-    if journal is not None and trade is not None:
-        journal.record_trade(trade)
+    if trade is not None:
+        _journal_safely(journal, "record_trade", trade)
     return fill, trade
+
+
+def _journal_safely(journal: Journal | None, method: str, *args: Any) -> None:
+    """Journal write that never prevents booking a real fill (e.g. a locked SQLite file)."""
+    if journal is None:
+        return
+    try:
+        getattr(journal, method)(*args)
+    except Exception:
+        logger.exception("journal %s failed; the fill is still booked in the portfolio", method)
 
 
 def safe_decide(engine: DecisionEngine, snapshot: MarketSnapshot, view: PortfolioView) -> Decision:
@@ -155,7 +177,13 @@ class TradingEngine:
         risk: RiskManager | None = None,
         clock_ms: Callable[[], int] | None = None,
         state_key: str = "default",
+        max_capital: float = 0.0,
     ) -> None:
+        """``max_capital`` (> 0): the most quote the bot trades with (plus its realized PnL),
+        however much free cash the account holds; 0 uses the whole free balance."""
+        if not math.isfinite(max_capital) or max_capital < 0:
+            raise ValueError(f"max_capital must be finite and >= 0, got {max_capital!r}")
+        self.max_capital = float(max_capital)
         self.settings = settings
         self.market = market
         self.broker = broker
@@ -167,6 +195,7 @@ class TradingEngine:
         self.clock_ms = clock_ms or _default_clock(market)
         self.state_key = state_key
         self.last_candle_ts: int | None = None
+        self._order_in_flight: dict[str, Any] | None = None
         self._stop = threading.Event()
 
     # ------------------------------------------------------------------ state
@@ -182,7 +211,8 @@ class TradingEngine:
             "symbol": self.settings.symbol,
             "timeframe": self.settings.timeframe,
             "last_candle_ts": self.last_candle_ts,
-            "portfolio": self.portfolio.to_state(),
+            "portfolio": self.portfolio.to_state(equity_points=SAVED_EQUITY_POINTS),
+            "order_in_flight": self._order_in_flight,
         }
         to_state = getattr(self.broker, "to_state", None)
         if callable(to_state):
@@ -197,8 +227,11 @@ class TradingEngine:
         expected = (STATE_VERSION, self.settings.symbol, self.settings.timeframe)
         found = (state.get("version"), state.get("symbol"), state.get("timeframe"))
         if found != expected:
-            logger.warning(
-                "saved state %s is incompatible (%s != %s); starting fresh", self.state_name, found, expected
+            open_position = bool((state.get("portfolio") or {}).get("qty"))
+            logger.log(
+                logging.ERROR if open_position else logging.WARNING,
+                "saved state %s is incompatible (%s != %s); starting fresh%s", self.state_name, found, expected,
+                " - IT HAS AN OPEN POSITION that will not be managed" if open_position else "",
             )
             return False
         self.portfolio = Portfolio.from_state(state["portfolio"])
@@ -208,6 +241,14 @@ class TradingEngine:
             restored.fee_pct, restored.slippage_pct = self.broker.fee_pct, self.broker.slippage_pct  # settings win
             self.broker = restored
         now = self.clock_ms()
+        in_flight = state.get("order_in_flight")
+        if in_flight:  # the last session died while an order was being sent: its outcome is unknown
+            self.portfolio.halt(ORDER_STATE_UNKNOWN)
+            self._event(
+                now, ORDER_STATE_UNKNOWN,
+                f"the previous session stopped while sending an order ({in_flight}); check the exchange, "
+                "then clear the halt with `jev status --reset-halt`",
+            )
         self._reconcile(now)
         p = self.portfolio
         self._event(
@@ -245,8 +286,10 @@ class TradingEngine:
             return TickResult(SKIPPED, timestamp=last.timestamp, events=["market_error"])
         price = self._market_price(snapshot)
         result = TickResult(OK, timestamp=snapshot.timestamp, price=price)
+        age_ms = now - (last.timestamp + self.tf_ms)  # time since the newest closed candle closed
+        stale = age_ms > self.tf_ms + STALE_GRACE_MS
         try:
-            self._trade_tick(candles, snapshot, price, now, result)
+            self._trade_tick(candles, snapshot, price, now, result, stale_ms=age_ms if stale else None)
         except JevError as exc:  # e.g. balances unavailable: skip this tick, retry on the next one
             self._event(now, "broker_error", str(exc), result)
             result.status = SKIPPED
@@ -257,10 +300,19 @@ class TradingEngine:
         return result
 
     def _trade_tick(
-        self, candles: Sequence[Candle], snapshot: MarketSnapshot, price: float, now: int, result: TickResult
+        self, candles: Sequence[Candle], snapshot: MarketSnapshot, price: float, now: int, result: TickResult,
+        stale_ms: int | None = None,
     ) -> None:
         exited = self._protective_exits(self._unprocessed(candles), price, now, result)
         view = self._view(price)
+        flow = self.portfolio.observe_balances(now, view.cash, view.base_qty, price)
+        if flow:
+            self._event(
+                now, "external_flow",
+                f"{flow:+.2f} {view.quote_currency} moved outside the bot (deposit, withdrawal or manual trade): "
+                "not counted as PnL; kill-switch baselines adjusted",
+                result,
+            )
         self.portfolio.mark(now, view.equity)
         self.journal.record_equity(now, view.equity, price)
         result.equity = view.equity
@@ -269,6 +321,13 @@ class TradingEngine:
             logger.info("protective exit this tick: decision skipped")
         elif halt and not self.portfolio.in_position:
             logger.info("trading halted (%s) and flat: decision skipped", halt)
+        elif stale_ms is not None:
+            self._event(
+                now, "stale_data",
+                f"newest closed candle {iso_utc(snapshot.timestamp)} closed {stale_ms / 60_000:.1f} min ago: "
+                "decision skipped (stops and kill switch still checked)",
+                result,
+            )
         else:
             self._decide_and_trade(snapshot, price, now, result)
         if result.fills:
@@ -299,7 +358,16 @@ class TradingEngine:
         return price if math.isfinite(price) and price > 0 else snapshot.price
 
     def _view(self, price: float) -> PortfolioView:
-        return self.portfolio.view(self.broker.balances(), price)
+        return self.portfolio.view(self._balances(), price)
+
+    def _balances(self) -> Balances:
+        """Broker balances, with the cash capped to the bot's own capital when ``max_capital`` is set."""
+        balances = self.broker.balances()
+        if self.max_capital > 0:
+            own = max(self.max_capital + self.portfolio.realized_pnl - self.portfolio.capital_in_use, 0.0)
+            if balances.cash > own:
+                balances = Balances(cash=own, base_qty=balances.base_qty)
+        return balances
 
     def _unprocessed(self, candles: Sequence[Candle]) -> list[Candle]:
         """Closed candles not seen yet (all missed candles after a restart)."""
@@ -378,31 +446,54 @@ class TradingEngine:
         stop_loss: float | None = None,
         take_profit: float | None = None,
     ) -> Fill | None:
-        """Execute and book an order; broker errors become journal events."""
+        """Execute and book an order; broker errors become journal events.
+
+        The order is marked "in flight" in the saved state while it is sent, so a crash or
+        a forced quit (second Ctrl+C) in that window halts new entries on the next start
+        instead of silently losing a real fill (see ``restore_state``).
+        """
+        self._order_in_flight = {
+            "side": order.side.value, "quantity": order.quantity, "ts": now, "client_id_prefix": f"jev-{int(now)}-",
+        }
+        try:
+            self.save_state()
+        except Exception:
+            self._order_in_flight = None
+            raise
         try:
             fill, trade = execute_order(
                 self.broker, self.portfolio, order, price, now,
                 exit_reason=exit_reason, stop_loss=stop_loss, take_profit=take_profit, journal=self.journal,
             )
-        except InsufficientFundsError as exc:
-            self._event(now, "insufficient_funds", f"{order.side.value}: {exc}", result)
+        except Exception as exc:  # KeyboardInterrupt/SystemExit keep the in-flight marker
+            self._order_in_flight = None
+            self._order_failed(order, exc, now, result)
             return None
-        except OrderStateUnknownError as exc:
-            logger.error("ORDER STATE UNKNOWN - new entries halted until checked: %s", exc)
-            self.portfolio.halt(ORDER_STATE_UNKNOWN)
-            self._event(now, ORDER_STATE_UNKNOWN, f"{order.side.value}: {exc}; entries halted", result)
-            return None
-        except OrderRejectedError as exc:
-            self._event(now, "order_rejected", f"{order.side.value}: {exc}", result)
-            return None
-        except ValueError as exc:  # the broker filled but the portfolio refused to book it
-            logger.exception("fill could not be booked")
-            self._event(now, "booking_error", f"{order.side.value}: {exc}", result)
-            return None
+        self._order_in_flight = None
         result.fills.append(fill)
         if trade is not None:
             result.trades.append(trade)
         return fill
+
+    def _order_failed(self, order: OrderRequest, exc: Exception, now: int, result: TickResult) -> None:
+        side = order.side.value
+        if isinstance(exc, InsufficientFundsError):
+            self._event(now, "insufficient_funds", f"{side}: {exc}", result)
+        elif isinstance(exc, OrderStateUnknownError):
+            logger.error("ORDER STATE UNKNOWN - new entries halted until checked: %s", exc)
+            self.portfolio.halt(ORDER_STATE_UNKNOWN)
+            self._event(now, ORDER_STATE_UNKNOWN, f"{side}: {exc}; entries halted", result)
+        elif isinstance(exc, OrderRejectedError):
+            self._event(now, "order_rejected", f"{side}: {exc}", result)
+        elif isinstance(exc, ValueError):  # the broker filled but the portfolio refused to book it
+            logger.exception("fill could not be booked")
+            self._event(now, "booking_error", f"{side}: {exc}", result)
+        else:  # unexpected: the order may or may not have been executed
+            logger.exception("unexpected error while sending an order")
+            self.portfolio.halt(ORDER_STATE_UNKNOWN)
+            self._event(
+                now, ORDER_STATE_UNKNOWN, f"{side}: unexpected {type(exc).__name__}: {exc}; entries halted", result,
+            )
 
     def _event(self, ts: int, kind: str, message: str, result: TickResult | None = None) -> None:
         logger.log(_EVENT_LEVELS.get(kind, logging.WARNING), "%s: %s", kind, message)

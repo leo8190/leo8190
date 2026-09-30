@@ -212,3 +212,96 @@ def test_dotenv_with_inline_comments_and_anthropic_key(tmp_path, monkeypatch, ca
 def test_help_exits_0(capsys):
     assert main(["--help"]) == 0
     assert "backtest" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------- regressions (review)
+
+
+def test_debug_logs_never_print_api_keys(capsys):
+    # regression safety-5: `jev -vv live` printed the X-MBX-APIKEY header through ccxt's DEBUG log
+    import logging
+
+    from jev.config import Settings
+
+    cli._configure_logging(2)
+    try:
+        cli._protect_secrets(Settings(api_key="MYAPIKEY_SHOULD_NOT_LEAK", api_secret="MYSECRET_SHOULD_NOT_LEAK"))
+        logging.getLogger("ccxt.base.exchange").debug(
+            "%s %s, Request: %s %s", "GET", "https://testnet.binance.vision/api/v3/account",
+            {"X-MBX-APIKEY": "MYAPIKEY_SHOULD_NOT_LEAK"}, None,
+        )
+        try:
+            raise RuntimeError("secret MYSECRET_SHOULD_NOT_LEAK in a traceback")
+        except RuntimeError:
+            logging.getLogger("ccxt").exception("boom")
+    finally:
+        cli._configure_logging(0)
+    err = capsys.readouterr().err
+    assert "X-MBX-APIKEY" in err and "***" in err
+    assert "SHOULD_NOT_LEAK" not in err
+
+
+def test_ctrl_c_stops_gracefully_then_forces_on_the_second_press():
+    # regression runtime-1: Ctrl+C raised inside a live order and lost the fill
+    class Engine:
+        stopping = False
+
+        def stop(self):
+            self.stopping = True
+
+    engine = Engine()
+    handler = cli._graceful_sigint(engine)
+    handler()
+    assert engine.stopping
+    with pytest.raises(KeyboardInterrupt):
+        handler()
+
+
+def _live_env(monkeypatch):
+    monkeypatch.setenv("JEV_MODE", "live")
+    monkeypatch.setenv("JEV_USE_TESTNET", "true")
+    monkeypatch.setenv("JEV_API_KEY", "key-123456")
+    monkeypatch.setenv("JEV_API_SECRET", "secret-456789")
+    monkeypatch.setenv("JEV_ENGINE", "rules")
+
+
+def test_live_refuses_to_start_when_another_timeframe_holds_a_position(tmp_path, monkeypatch, capsys):
+    # regression safety-3: restarting with another JEV_TIMEFRAME silently dropped a real
+    # position and its stop-loss (the state key includes the timeframe)
+    from jev.portfolio import Portfolio
+
+    _live_env(monkeypatch)
+    monkeypatch.setenv("JEV_TIMEFRAME", "15m")
+    path = str(tmp_path / "live.sqlite3")
+    p = Portfolio("BTC/USDT", "USDT", "BTC")
+    from jev.models import Fill, Side
+
+    p.apply_fill(Fill(order_id="1", symbol="BTC/USDT", side=Side.BUY, quantity=0.0025, price=100_000.0, fee=0.25,
+                      timestamp=1_767_225_600_000), stop_loss=98_000.0)
+    with Journal(path) as j:
+        j.save_state("engine:live:testnet:binance:BTC/USDT:5m", {"portfolio": p.to_state()})
+    assert main(["live", "--journal", path, "--max-iterations", "1"]) == 2
+    captured = capsys.readouterr()
+    assert "live:testnet:binance:BTC/USDT:5m" in captured.err and "JEV_TIMEFRAME" in captured.err
+    assert "USDT libre" in captured.out  # the banner says the whole free balance is used
+
+
+def test_status_warns_that_totals_mix_sessions(tmp_path, capsys):
+    # regression runtime-5: synthetic, paper and live totals were summed without saying so
+    from jev.portfolio import Portfolio
+
+    path = str(tmp_path / "mix.sqlite3")
+    with Journal(path) as j:
+        for key in ("engine:paper:synthetic:BTC/USDT:5m", "engine:live:mainnet:binance:BTC/USDT:5m"):
+            j.save_state(key, {"portfolio": Portfolio("BTC/USDT", "USDT", "BTC").to_state()})
+    assert main(["status", "--journal", path]) == 0
+    assert "suman TODAS las sesiones" in capsys.readouterr().out
+
+
+def test_decide_with_the_jev_engine_without_key_is_a_clean_fallback(monkeypatch, capsys):
+    # regression runtime-9: the Jev engine was not selectable from the CLI
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    assert main(["decide", "--synthetic", "--engine", "jev"]) == 0
+    captured = capsys.readouterr()
+    assert "Motor        jev" in captured.out and "HOLD" in captured.out and "fuente fallback" in captured.out
+    assert "TYPESAFE_API_KEY" in captured.err and "Traceback" not in captured.err
