@@ -802,6 +802,20 @@ def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK
 
 
+def cmd_doctor(args: argparse.Namespace, settings: Settings) -> int:
+    from .doctor import FAIL, run_checks
+
+    marks = {"ok": "✓", "warn": "!", "fail": "✗", "skip": "-"}
+    print(f"Jev Trader · chequeo previo (solo lectura) · motor {settings.engine} · "
+          f"{settings.exchange} {settings.symbol} {settings.timeframe}")
+    checks = run_checks(settings, os.environ, online=not args.offline)
+    for c in checks:
+        print(f"  {marks[c.status]} {c.name:<20} {c.detail}")
+    failed = [c for c in checks if c.status == FAIL]
+    print("Listo para paper trading." if not failed else f"{len(failed)} problema(s) para resolver.")
+    return EXIT_RUNTIME if failed else EXIT_OK
+
+
 # ---------------------------------------------------------------------------- parser
 
 
@@ -881,6 +895,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reset-halt", action="store_true",
                    help="quitar un kill switch activo del estado guardado (detené el bot antes)")
     p.set_defaults(handler=cmd_status)
+
+    p = sub.add_parser("doctor", help="chequeo previo: claves, conexión a Jev y datos del exchange (solo lectura)")
+    _common(p)
+    p.add_argument("--offline", action="store_true", help="no probar la red (Jev ni exchange)")
+    p.set_defaults(handler=cmd_doctor)
     return parser
 
 

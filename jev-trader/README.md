@@ -196,6 +196,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env          # completá lo que necesites; .env nunca se sube al repo
 
+# 0) Chequeo previo, solo lectura: claves, conexión a Jev (sin gastar tokens) y datos del exchange
+jev doctor
+
 # 1) Backtest offline con datos sintéticos y el motor de reglas (sin claves, sin red)
 jev backtest --source synthetic --engine rules
 #    -> imprime el resumen y escribe reports/backtest.html
@@ -350,6 +353,7 @@ Variables avanzadas, opcionales:
 | `jev paper [--synthetic] [--fast] [--max-iterations N] [--journal RUTA] [--fresh]` | Paper trading en tiempo real: espera cada cierre de vela más 2 s. `--synthetic --fast` simula sin esperas |
 | `jev live [--max-iterations N] [--yes]` | Órdenes reales por ccxt (testnet por defecto). Requiere `JEV_MODE=live` |
 | `jev download --since YYYY-MM-DD [--until YYYY-MM-DD] --out RUTA.csv` | Descarga velas históricas públicas a CSV |
+| `jev doctor [--offline] [--engine E]` | Chequeo previo de solo lectura: modo, claves (sin mostrarlas), conexión a Jev listando modelos (no gasta tokens) y velas públicas del exchange. Sale con `1` si algo falla |
 | `jev status [--journal RUTA] [--limit N] [--reset-halt]` | Resumen del journal, estado guardado y últimas decisiones y eventos |
 
 Todos aceptan `-v` (INFO) o `-vv` (DEBUG), y `--env-file`. También funciona `python -m jev …`. Códigos de
