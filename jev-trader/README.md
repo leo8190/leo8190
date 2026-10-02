@@ -13,7 +13,9 @@ modo live, en la **testnet** del exchange.
 
 ## Qué hace
 
-- **Decide en cada vela cerrada** (por defecto BTC/USDT, 5 minutos) si comprar, vender o esperar.
+- **Decide en cada vela cerrada** (por defecto BTC/USDT, 5 minutos) si comprar, vender o esperar. Con Jev
+  conviene 1 hora: en 5m el costo de operar se come el take-profit y Jev casi nunca compra (ver
+  [Qué respondió Jev con datos reales](#qué-respondió-jev-con-datos-reales-octubre-de-2026)).
 - **Cuatro motores de decisión** intercambiables:
   - `hybrid` (el valor por defecto): las reglas proponen y **Jev confirma**. Sin confirmación no hay
     entrada; las salidas nunca esperan al modelo.
@@ -98,7 +100,8 @@ modo live, en la **testnet** del exchange.
 [TypeSafe AI](https://typesafe.ai), lanzado en septiembre de 2026 (acceso anticipado con lista de espera).
 **No genera texto**: recibe un estado en JSON y responde preguntas tipadas con probabilidades calibradas,
 en una sola pasada (~70-500 ms). Encaja con el trading: una decisión es **una sola llamada** a
-`system_one` con todas las preguntas juntas, que cuesta lo mismo que una sola pregunta.
+`system_one` con todas las preguntas juntas: el estado se envía una vez y hay un solo viaje de red (cada
+pregunta suma algunos tokens de entrada; ver [Costo por decisión](#costo-por-decisión)).
 
 **Estado que recibe** (solo números, nunca texto externo): precio, indicadores (EMAs, RSI, MACD, ATR,
 Bollinger, retornos, volatilidad, volumen relativo), últimos 20 cierres, estado de la posición y el costo
@@ -106,21 +109,48 @@ de ida y vuelta (comisión + slippage).
 
 **Preguntas por decisión:**
 
+Antes de preguntar, el bot fija los niveles en código: stop = 2× ATR % (acotado a 0,3-10 %; 2 % si no hay
+ATR) y take-profit = 2× el stop. Las preguntas incluyen esos **precios concretos** y el costo de ida y vuelta.
+
 | Situación | Pregunta | Tipo | Se usa para |
 |---|---|---|---|
-| Sin posición | `action`: ¿BUY o HOLD? | Choice | acción; `p(BUY)` |
-| Sin posición | `edge`: ¿un largo toca el take-profit (2× el stop) antes que el stop? | Noul (probabilidad) | confianza = `min(p(BUY), edge)` |
-| Sin posición | `stop_width`: tight / normal / wide | Choice | stop = 1×, 2× o 3× ATR % (acotado a 0,3-10 %); TP = 2× stop |
+| Sin posición | `action`: ¿BUY o HOLD, con este stop, este TP y estos costos? | Choice | acción; confianza = `p(BUY)` |
+| Sin posición | `tp_first`: ¿el precio toca el TP antes que el stop en las próximas 12 velas? | Noul (probabilidad) | valor esperado |
+| Sin posición | `stop_first`: ¿toca el stop antes que el TP en las próximas 12 velas? | Noul (probabilidad) | valor esperado |
 | Sin posición | `size`: setup débil … excepcional | Score (0-3) | tamaño = 25-100 % de la posición máxima |
 | Con posición | `action`: ¿SELL o HOLD? | Choice | salida anticipada; confianza = `p(SELL)` |
 
-El gestor de riesgo recibe esa propuesta y **solo puede achicarla o rechazarla**.
+Una compra necesita que Jev elija BUY **y** que el valor esperado después de costos sea positivo:
+
+```
+EV = p(tp_first) × TP % − p(stop_first) × stop % − costo ida y vuelta %  > 0
+```
+
+Si no, la decisión es HOLD y el razonamiento lo dice (`BUY vetoed, no edge after costs`). El gestor de
+riesgo recibe la propuesta y **solo puede achicarla o rechazarla**.
+
+### Qué respondió Jev con datos reales (octubre de 2026)
+
+Prueba con BTC/USDT de Binance posterior al lanzamiento de Jev (sin contaminación de entrenamiento):
+
+- **Es coherente**: con tendencia bajista `p(BUY)` ≈ 0,02; con tendencia alcista, 0,3-0,8.
+- **Para 2:1 ve una caminata aleatoria**: `p(tp_first)` ≈ 0,25 y `p(stop_first)` ≈ 0,35-0,45.
+- **En 5m no opera**: el TP (~0,6 %) apenas duplica el costo de ida y vuelta (0,3 %), así que el EV
+  siempre da negativo. En 800 velas de 5m hizo 0 compras.
+- **En 1h opera poco**: en 500 velas (≈21 días) hizo 7 operaciones con −0,5 % (`jev`) y −0,4 %
+  (`hybrid`), contra −1,5 % de `rules` y +10,4 % de buy & hold. La muestra es chica y no prueba nada.
+- Una versión anterior preguntaba "¿el TP sale antes que el stop?" **sin decir dónde estaban**. Jev
+  respondía ~0,4 en cualquier mercado, y como la confianza era `min(p(BUY), esa respuesta)`, nunca llegaba
+  a 0,6: el bot no podía abrir posiciones.
+
+Para hacer paper trading con Jev conviene `JEV_TIMEFRAME=1h`.
 
 ### Por qué híbrido por defecto
 
 - Las reglas evalúan cada vela en microsegundos y sin costo, y sirven de filtro de tendencia.
-- En `hybrid`, Jev **confirma cada entrada** que proponen las reglas: sin confirmación no se compra, y se
-  usa el stop más ajustado de los dos.
+- En `hybrid`, Jev **confirma cada entrada** que proponen las reglas: sin confirmación no se compra. Se
+  opera con el stop y el take-profit que evaluó Jev (con Claude como confirmador, el stop más ajustado de
+  los dos).
 - Como Jev es rápido y casi gratis, el heartbeat automático lo consulta **en cada vela**: puede sugerir una
   salida anticipada o una entrada si el filtro de tendencia no es bajista. Con Claude como confirmador
   (`JEV_HYBRID_CONFIRMER=claude`) el heartbeat pasa a 12 velas.
@@ -132,21 +162,21 @@ El gestor de riesgo recibe esa propuesta y **solo puede achicarla o rechazarla**
 
 ### Costo por decisión
 
-Jev cobra **~US$0,042 por millón de tokens de entrada**; la salida es gratis. Medido con `build_state`
-sobre datos sintéticos: una consulta sin posición (estado + 4 preguntas) ronda **~630 tokens** y una con
-posición (1 pregunta) **~330**:
+Jev cobra **~US$0,042 por millón de tokens de entrada**; la salida es gratis. Medido con la API real
+(octubre de 2026, BTC/USDT): una consulta sin posición (estado + 4 preguntas) usa **~1.250 tokens** y una
+con posición (1 pregunta) **~900**. La latencia fue de 250-330 ms.
 
 ```
-sin posición: 630 × 0,042 / 1.000.000 ≈ US$0,000026
-con posición: 330 × 0,042 / 1.000.000 ≈ US$0,000014
+sin posición: 1.250 × 0,042 / 1.000.000 ≈ US$0,000053
+con posición:   900 × 0,042 / 1.000.000 ≈ US$0,000038
 ```
 
-Con velas de 5 minutos hay 288 velas por día:
+Con velas de 5 minutos hay 288 velas por día (con 1h, 24):
 
 | Modo | Llamadas/día | Costo/día aprox. |
 |---|---|---|
 | `rules` | 0 | US$0 |
-| `hybrid` / `jev` | hasta 288 (una por vela) | **< US$0,01** (~US$0,2/mes) |
+| `hybrid` / `jev` | hasta 288 (una por vela) | **~US$0,015** (~US$0,45/mes); con 1h, ~US$0,04/mes |
 | `claude` (Haiku 4.5, US$1 / US$5 por millón) | 288 | ~US$0,43 (~US$13/mes) |
 
 Los precios pueden cambiar: ajustalos con `JEV_PRICE_PER_MTOK_INPUT`. `JEV_MAX_AI_COST_USD_PER_DAY`
@@ -178,6 +208,7 @@ jev decide --synthetic --engine rules
 # 3) Paper trading
 jev paper --synthetic --fast --max-iterations 200 --engine rules   # simulación offline acelerada
 jev paper                                                          # precios reales, dinero simulado
+JEV_TIMEFRAME=1h jev paper --journal jev_paper_1h.sqlite3          # recomendado con Jev (ver abajo)
 
 # 4) Estado y journal
 jev status
@@ -276,7 +307,7 @@ de configuración, nunca un `false` silencioso.
 | `JEV_CLAUDE_MODEL` | `claude-haiku-4-5` | Modelo de Claude |
 | `JEV_EXCHANGE` | `binance` | Id del exchange en ccxt |
 | `JEV_SYMBOL` | `BTC/USDT` | Par spot `BASE/QUOTE` |
-| `JEV_TIMEFRAME` | `5m` | Timeframe de las velas (`1m`, `5m`, `1h`, `1d`…) |
+| `JEV_TIMEFRAME` | `5m` | Timeframe de las velas (`1m`, `5m`, `1h`, `1d`…). Con Jev se recomienda `1h` |
 | `JEV_MODE` | `paper` | `paper` o `live` |
 | `JEV_USE_TESTNET` | `true` | En modo live: testnet (`true`) o mainnet (`false`) |
 | `JEV_LIVE_CONFIRM` | (vacía) | Para mainnet: `YES_I_ACCEPT_REAL_MONEY_RISK` |
@@ -386,7 +417,7 @@ pequeña.
 .venv/bin/pytest -q
 ```
 
-La suite (~640 tests) corre **offline** en pocos segundos. Usa fakes para el exchange, el broker y los
+La suite (~655 tests) corre **offline** en pocos segundos. Usa fakes para el exchange, el broker y los
 clientes de TypeSafe (Jev) y Anthropic, y no hace ninguna llamada de red.
 
 ## Limitaciones (honestas)

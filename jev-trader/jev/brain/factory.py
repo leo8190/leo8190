@@ -34,6 +34,9 @@ def _jev(settings: Settings, client: Any) -> DecisionEngine:
         price_per_mtok_input=settings.jev_price_per_mtok_input,
         round_trip_cost_pct=2.0 * (settings.fee_pct + settings.slippage_pct),
         max_position_pct=settings.risk.max_position_pct,
+        min_stop_pct=settings.risk.min_stop_pct,
+        max_stop_pct=settings.risk.max_stop_pct,
+        fallback_stop_pct=settings.risk.default_stop_pct,
         client=client,
     )
 

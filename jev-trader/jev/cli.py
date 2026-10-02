@@ -32,7 +32,9 @@ LLM_COST_CONFIRM_USD = 1.0  # a Claude backtest above this worst case needs --ye
 TYPICAL_OUTPUT_TOKENS = 150
 SCHEMA_OVERHEAD_TOKENS = 400  # structured-output schema + formatting, rough and conservative
 CHARS_PER_TOKEN = 3  # conservative (real ratio is closer to 3.5-4 for this prompt)
-JEV_QUESTIONS_TOKENS = 800  # Jev's typed questions (instructions + criteria), rough and conservative
+# Jev tokenizes numbers densely: real calls (Oct 2026) used ~1,250 input tokens for ~2,400 chars
+# of state + questions JSON (~1.9 chars/token). 1.8 keeps the estimate slightly above reality.
+JEV_CHARS_PER_TOKEN = 1.8
 
 
 class UsageError(Exception):
@@ -281,10 +283,17 @@ def _llm_cost_per_call(settings: Settings, candles: Sequence[Candle]) -> tuple[f
     if _ai_model(settings) == "jev":
         import json
 
-        from .brain.jev_engine import build_state
+        from .brain.jev_engine import REWARD_RISK, _flat_questions, build_state, reference_stop_pct
 
-        state = build_state(snapshot, _flat_view(settings), 2.0 * (settings.fee_pct + settings.slippage_pct))
-        in_tokens = len(json.dumps(state)) / CHARS_PER_TOKEN + JEV_QUESTIONS_TOKENS
+        cost_pct = 2.0 * (settings.fee_pct + settings.slippage_pct)
+        state = build_state(snapshot, _flat_view(settings), cost_pct)
+        risk = settings.risk
+        stop_pct = reference_stop_pct(snapshot.indicators.atr_pct, risk.min_stop_pct, risk.max_stop_pct,
+                                      risk.default_stop_pct)
+        questions = _flat_questions(f"12 candles of {settings.timeframe}", snapshot.price, stop_pct,
+                                    stop_pct * REWARD_RISK, cost_pct)
+        chars = len(json.dumps(state)) + len(json.dumps({k: q.model_dump() for k, q in questions.items()}))
+        in_tokens = chars / JEV_CHARS_PER_TOKEN
         cost = in_tokens * settings.jev_price_per_mtok_input / 1_000_000  # Jev output tokens are free
         return cost, cost
     from .brain.claude_engine import SYSTEM_PROMPT, format_prompt, price_for

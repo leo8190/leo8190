@@ -10,3 +10,5 @@ reports/
 build/
 dist/
 .ruff_cache/
+logs/
+*.log

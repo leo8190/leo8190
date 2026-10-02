@@ -3,7 +3,14 @@
 Jev does not generate text. It answers typed questions (choice, score, noul) about a
 JSON ``state`` with calibrated probabilities in a single non-autoregressive pass
 (~70-500 ms). A whole trading decision is therefore ONE ``system_one`` call: every
-question about the same state is asked together, which costs about the same as one.
+question about the same state is asked together, so the state is sent once and there is a
+single round trip (each question still adds billed input tokens).
+
+Entries are cost-aware: the stop comes from the ATR (2x, clamped) and the take-profit is
+twice the stop, and Jev is asked about those concrete price levels (vague questions such as
+"does the take-profit hit first?" without the levels get ~0.4 back whatever the market does).
+A BUY needs Jev to choose BUY *and* a positive expected value after round-trip costs:
+``p(tp first) * tp - p(stop first) * stop - costs > 0``.
 
 The engine never raises: any failure (no key, timeout, rate limit, bad response,
 exhausted budget) becomes a HOLD with ``source="fallback"``. Protective exits and
@@ -28,8 +35,8 @@ DEFAULT_JEV_MODEL = "jev-latest"
 # USD per 1M input tokens; Jev output tokens are free (TypeSafe pricing, Sep 2026).
 DEFAULT_PRICE_PER_MTOK_INPUT = 0.042
 
-STOP_ATR_MULTIPLIER = {"tight": 1.0, "normal": 2.0, "wide": 3.0}
-FALLBACK_STOP_PCT = {"tight": 1.0, "normal": 2.0, "wide": 3.0}  # when ATR is unknown
+STOP_ATR_MULTIPLIER = 2.0
+FALLBACK_STOP_PCT = 2.0  # when ATR is unknown
 SIZE_RUBRIC = [
     "Weak setup: allocate 25% of the allowed position size.",
     "Moderate setup: allocate 50% of the allowed position size.",
@@ -41,37 +48,50 @@ MIN_STOP_PCT, MAX_STOP_PCT = 0.3, 10.0
 RETRY_BACKOFF_MAX_S = 1.0
 
 
-def _flat_questions(horizon: str) -> dict[str, Any]:
+def _level(value: float) -> str:
+    return f"{value:.6g}"
+
+
+def _flat_questions(horizon: str, price: float, stop_pct: float, take_profit_pct: float,
+                    cost_pct: float) -> dict[str, Any]:
+    """Questions for an entry with concrete levels: Jev cannot judge "does the take-profit hit
+    first?" without knowing where the stop and the take-profit are."""
+    stop, target = _level(price * (1 - stop_pct / 100)), _level(price * (1 + take_profit_pct / 100))
+    entry = _level(price)
+    levels = f"take-profit {target} (+{take_profit_pct:.2f}%)", f"stop-loss {stop} (-{stop_pct:.2f}%)"
     return {
         "action": Choice(
             instructions=(
                 "The account trades spot crypto, long only, no leverage, and is currently FLAT. "
-                f"Decide what to do now for the next {horizon}, weighing trend, momentum, "
-                "volatility and trading costs."
+                f"A long opened now at {entry} would get a {levels[1]} and a {levels[0]}. "
+                f"Round-trip trading costs are {cost_pct:.2f}% of the position. "
+                f"Decide what to do now for the next {horizon}."
             ),
             criteria={
-                "BUY": "Open a long now: trend and momentum point up and the expected move "
-                "clearly exceeds the round-trip trading costs.",
-                "HOLD": "Stay flat: signals conflict, the trend is down or sideways, or the "
-                "expected move does not beat trading costs.",
+                "BUY": "Open the long: trend and momentum point up and the take-profit is more likely "
+                "than usual to be reached before the stop-loss, enough to pay the trading costs.",
+                "HOLD": "Stay flat: signals conflict, the trend is down or sideways, or the trade has "
+                "no clear edge after trading costs.",
             },
         ),
-        "edge": Noul(
+        "tp_first": Noul(
             instructions=(
-                "A long opened at the current price, with a take-profit twice as far as its "
-                f"stop-loss, hits the take-profit first within the next {horizon}."
+                f"A long is opened now at {entry}. Within the next {horizon}, price touches the "
+                f"{levels[0]} before it touches the {levels[1]}."
             ),
             criteria={
-                "true": "The take-profit is reached before the stop-loss.",
-                "false": "The stop-loss is reached first, or neither is reached.",
+                "true": "The take-profit is touched first.",
+                "false": "The stop-loss is touched first, or neither level is touched in the window.",
             },
         ),
-        "stop_width": Choice(
-            instructions="How much room should the protective stop-loss give this trade?",
+        "stop_first": Noul(
+            instructions=(
+                f"A long is opened now at {entry}. Within the next {horizon}, price touches the "
+                f"{levels[1]} before it touches the {levels[0]}."
+            ),
             criteria={
-                "tight": "About 1x ATR: calm market with a clear invalidation level.",
-                "normal": "About 2x ATR: typical conditions.",
-                "wide": "About 3x ATR: volatile, noisy price action.",
+                "true": "The stop-loss is touched first.",
+                "false": "The take-profit is touched first, or neither level is touched in the window.",
             },
         ),
         "size": Score(instructions="How strong is this long setup?", criteria=SIZE_RUBRIC),
@@ -158,6 +178,22 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def reference_stop_pct(atr_pct: float | None, low: float = MIN_STOP_PCT, high: float = MAX_STOP_PCT,
+                       fallback: float = FALLBACK_STOP_PCT) -> float:
+    """Entry stop distance in %: 2x ATR % (``fallback`` without ATR), clamped to [low, high].
+    The factory passes the risk manager's bounds, so it never re-clamps a stop Jev evaluated."""
+    if atr_pct is None or not math.isfinite(atr_pct) or atr_pct <= 0:
+        return _clamp(fallback, low, high)
+    return _clamp(STOP_ATR_MULTIPLIER * atr_pct, low, high)
+
+
+def _probability(value: Any, name: str) -> float:
+    p = float(value)
+    if not math.isfinite(p):
+        raise ValueError(f"non-finite {name}")
+    return _clamp(p, 0.0, 1.0)
+
+
 class JevDecisionEngine:
     """Asks Jev one batch of typed questions per decision."""
 
@@ -175,13 +211,24 @@ class JevDecisionEngine:
         client: Any | None = None,
         clock_ms: Callable[[], int] | None = None,
         max_position_pct: float = 25.0,
+        min_stop_pct: float = MIN_STOP_PCT,
+        max_stop_pct: float = MAX_STOP_PCT,
+        fallback_stop_pct: float = FALLBACK_STOP_PCT,
     ) -> None:
         """``max_position_pct``: the risk manager's max position (% of equity). Jev scores the
         setup as a fraction of the allowed position; ``Decision.size_pct`` is a fraction of
-        equity, so the fraction is scaled by it."""
+        equity, so the fraction is scaled by it. ``min_stop_pct``/``max_stop_pct``/
+        ``fallback_stop_pct``: the risk manager's stop bounds and default stop, so the bracket
+        Jev is asked about is the one that gets traded."""
         if not math.isfinite(max_position_pct) or not 0 < max_position_pct <= 100:
             raise ValueError(f"max_position_pct must be in (0, 100], got {max_position_pct!r}")
+        stops = (min_stop_pct, max_stop_pct, fallback_stop_pct)
+        if not all(math.isfinite(v) for v in stops) or not 0 < min_stop_pct <= max_stop_pct or fallback_stop_pct <= 0:
+            raise ValueError(f"invalid stop bounds min={min_stop_pct!r} max={max_stop_pct!r} "
+                             f"fallback={fallback_stop_pct!r}")
         self.max_position_pct = float(max_position_pct)
+        self.min_stop_pct, self.max_stop_pct = float(min_stop_pct), float(max_stop_pct)
+        self.fallback_stop_pct = float(fallback_stop_pct)
         self.model = model
         self.timeout_s = timeout_s
         self.max_retries = max_retries
@@ -246,7 +293,13 @@ class JevDecisionEngine:
             return self._fallback("daily Jev budget exhausted", attempted=False)
 
         horizon = f"{self.horizon_candles} candles of {snapshot.timeframe}"
-        questions = _holding_questions(horizon) if portfolio.in_position else _flat_questions(horizon)
+        stop_pct = reference_stop_pct(snapshot.indicators.atr_pct, self.min_stop_pct, self.max_stop_pct,
+                                      self.fallback_stop_pct)
+        if portfolio.in_position:
+            questions = _holding_questions(horizon)
+        else:
+            questions = _flat_questions(horizon, snapshot.price, stop_pct, stop_pct * REWARD_RISK,
+                                        self.round_trip_cost_pct)
         state = build_state(snapshot, portfolio, self.round_trip_cost_pct)
 
         started = time.perf_counter()
@@ -295,13 +348,13 @@ class JevDecisionEngine:
             "cost_usd": cost,
         }
         try:
-            decision = self._interpret(response, snapshot, portfolio)
+            decision = self._interpret(response, portfolio, stop_pct)
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Jev answers incomplete: %s", exc)
             return self._fallback("incomplete answers", **{k: v for k, v in meta.items() if k != "model"})
         return decision.model_copy(update=meta)
 
-    def _interpret(self, response: Any, snapshot: MarketSnapshot, portfolio: PortfolioView) -> Decision:
+    def _interpret(self, response: Any, portfolio: PortfolioView, stop_pct: float) -> Decision:
         action_answer = response.choices["action"]
         probabilities = {k: float(v) for k, v in action_answer.probabilities.items()}
         if not all(math.isfinite(p) for p in probabilities.values()):
@@ -326,39 +379,38 @@ class JevDecisionEngine:
             )
 
         p_buy = probabilities.get("BUY", 0.0)
-        edge = float(response.nouls["edge"].noul)
-        if not math.isfinite(edge):
-            raise ValueError("non-finite edge")
+        p_tp = _probability(response.nouls["tp_first"].noul, "tp_first")
+        p_stop = _probability(response.nouls["stop_first"].noul, "stop_first")
+        if p_tp + p_stop > 1.0:  # the two outcomes exclude each other
+            total = p_tp + p_stop
+            p_tp, p_stop = p_tp / total, p_stop / total
+        take_profit_pct = stop_pct * REWARD_RISK
+        cost = self.round_trip_cost_pct
+        # Expected net % of the position over the horizon ("neither level touched" counts as 0).
+        expected_pct = p_tp * take_profit_pct - p_stop * stop_pct - cost
+        stats = (f"p_buy={p_buy:.2f}, p_tp={p_tp:.2f}, p_stop={p_stop:.2f}, "
+                 f"stop={stop_pct:.2f}%, tp={take_profit_pct:.2f}%, ev={expected_pct:+.2f}% after {cost:.2f}% costs")
+        hold_confidence = _clamp(probabilities.get("HOLD", 0.0), 0.0, 1.0)
         if choice != "BUY":
-            return Decision(
-                action=Action.HOLD,
-                confidence=_clamp(probabilities.get("HOLD", 0.0), 0.0, 1.0),
-                reasoning=f"jev: stay flat (p_buy={p_buy:.2f}, edge={edge:.2f})",
-                source="jev",
-            )
+            return Decision(action=Action.HOLD, confidence=hold_confidence,
+                            reasoning=f"jev: stay flat ({stats})", source="jev")
+        if expected_pct <= 0:
+            return Decision(action=Action.HOLD, confidence=hold_confidence,
+                            reasoning=f"jev: BUY vetoed, no edge after costs ({stats})", source="jev")
 
-        width = response.choices["stop_width"].choice
-        multiplier = STOP_ATR_MULTIPLIER.get(width, STOP_ATR_MULTIPLIER["normal"])
-        atr_pct = snapshot.indicators.atr_pct
-        raw_stop = multiplier * atr_pct if atr_pct else FALLBACK_STOP_PCT.get(width, 2.0)
-        stop_pct = _clamp(raw_stop, MIN_STOP_PCT, MAX_STOP_PCT)
         size_score = float(response.scores["size"].score)  # expected level in [0, 3]
         if not math.isfinite(size_score):
             raise ValueError("non-finite size score")
         # Fraction of the allowed position (0.25..1.0), expressed as a fraction of equity.
         fraction = _clamp((size_score + 1) / len(SIZE_RUBRIC), 0.25, 1.0)
         size_pct = fraction * self.max_position_pct / 100.0
-        # Both the choice and the independent edge estimate must agree for a strong entry.
-        confidence = _clamp(min(p_buy, edge), 0.0, 1.0)
         return Decision(
             action=Action.BUY,
-            confidence=confidence,
+            confidence=_clamp(p_buy, 0.0, 1.0),
             size_pct=size_pct,
             stop_loss_pct=stop_pct,
-            take_profit_pct=stop_pct * REWARD_RISK,
-            reasoning=(
-                f"jev: enter long (p_buy={p_buy:.2f}, edge={edge:.2f}, stop={width}, "
-                f"size_score={size_score:.2f}/3 -> {fraction:.0%} of the max position)"
-            ),
+            take_profit_pct=take_profit_pct,
+            reasoning=(f"jev: enter long ({stats}, size_score={size_score:.2f}/3 -> "
+                       f"{fraction:.0%} of the max position)"),
             source="jev",
         )

@@ -330,14 +330,13 @@ def test_default_hybrid_engine_trades_when_jev_confirms():
 
     def jev_api(request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content)
-        if "edge" in body["questions"]:  # flat: agree to enter
+        if "tp_first" in body["questions"]:  # flat: agree to enter
             asked["flat"] += 1
             answers = {
                 "action": {"type": "choice", "choice": "BUY", "confidence": 0.9,
                            "probabilities": {"BUY": 0.85, "HOLD": 0.15}},
-                "edge": {"type": "noul", "noul": 0.75},
-                "stop_width": {"type": "choice", "choice": "normal", "confidence": 0.8,
-                               "probabilities": {"tight": 0.1, "normal": 0.8, "wide": 0.1}},
+                "tp_first": {"type": "noul", "noul": 0.75},
+                "stop_first": {"type": "noul", "noul": 0.2},
                 "size": {"type": "score", "score": 3.0, "confidence": 0.8,
                          "legend": {"0": "a", "1": "b", "2": "c", "3": "d"},
                          "probabilities": {"0": 0.0, "1": 0.0, "2": 0.0, "3": 1.0}},

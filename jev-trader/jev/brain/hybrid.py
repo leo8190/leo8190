@@ -91,7 +91,12 @@ class HybridDecisionEngine:
             return self._hold(rules, llm, "no entry without llm confirmation")
         if llm.action is not Action.BUY:
             return self._hold(rules, llm, "llm veto")
-        stop, take_profit = _tighter_stop(rules, llm)
+        if llm.source == "jev" and llm.stop_loss_pct is not None:
+            # Jev approved this exact bracket (its expected value after costs was positive);
+            # swapping in the rules stop would trade levels Jev never evaluated.
+            stop, take_profit = llm.stop_loss_pct, llm.take_profit_pct
+        else:
+            stop, take_profit = _tighter_stop(rules, llm)
         buy = Decision(
             action=Action.BUY,
             confidence=min(rules.confidence, llm.confidence),

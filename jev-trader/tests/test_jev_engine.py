@@ -38,15 +38,14 @@ def holding() -> PortfolioView:
     )
 
 
-def jev_payload(action: str = "BUY", p: float = 0.82, edge: float = 0.71, width: str = "normal",
+def jev_payload(action: str = "BUY", p: float = 0.82, tp_first: float = 0.6, stop_first: float = 0.3,
                 size: float = 1.4, input_tokens: int | None = 400) -> dict:
     other = "HOLD" if action != "HOLD" else "BUY"
     answers = {
         "action": {"type": "choice", "choice": action, "confidence": 0.8,
                    "probabilities": {action: p, other: round(1 - p, 6)}},
-        "edge": {"type": "noul", "noul": edge},
-        "stop_width": {"type": "choice", "choice": width, "confidence": 0.7,
-                       "probabilities": {"tight": 0.1, "normal": 0.8, "wide": 0.1}},
+        "tp_first": {"type": "noul", "noul": tp_first},
+        "stop_first": {"type": "noul", "noul": stop_first},
         "size": {"type": "score", "score": size, "confidence": 0.6,
                  "legend": {"0": "a", "1": "b", "2": "c", "3": "d"},
                  "probabilities": {"0": 0.1, "1": 0.4, "2": 0.4, "3": 0.1}},
@@ -80,9 +79,11 @@ def test_buy_decision_maps_answers_and_costs():
 
     assert decision.action is Action.BUY
     assert decision.source == "jev"
-    assert decision.confidence == pytest.approx(0.71)  # min(p_buy, edge)
-    assert decision.stop_loss_pct == pytest.approx(1.6)  # normal = 2x ATR% (0.8)
+    assert decision.confidence == pytest.approx(0.82)  # p_buy, once the expected value is positive
+    assert decision.stop_loss_pct == pytest.approx(1.6)  # 2x ATR% (0.8)
     assert decision.take_profit_pct == pytest.approx(3.2)
+    # 0.6 * 3.2 - 0.3 * 1.6 - 0.3 (default round-trip costs) = +1.14 %
+    assert "ev=+1.14%" in decision.reasoning
     # (1.4 + 1) / 4 = 60 % of the allowed position; max position 25 % -> 15 % of equity
     assert decision.size_pct == pytest.approx((1.4 + 1) / 4 * 0.25)
     assert decision.model == "jev-1.13"
@@ -93,9 +94,21 @@ def test_buy_decision_maps_answers_and_costs():
 
     body = sent[0]
     assert body["model"] == "jev-latest"
-    assert set(body["questions"]) == {"action", "edge", "stop_width", "size"}
+    assert set(body["questions"]) == {"action", "tp_first", "stop_first", "size"}
     assert set(body["questions"]["action"]["criteria"]) == {"BUY", "HOLD"}
     assert body["state"]["position"] == {"status": "flat"}
+    # Jev is asked about the concrete levels: entry 60123.5, stop -1.6 %, take-profit +3.2 %
+    for name in ("action", "tp_first", "stop_first"):
+        text = body["questions"][name]["instructions"]
+        assert "60123.5" in text and "59161.5" in text and "62047.4" in text
+    assert "0.30%" in body["questions"]["action"]["instructions"]  # round-trip costs
+    # tp_first asks for the take-profit first, stop_first for the stop first (not swapped)
+    q = body["questions"]
+    tp_text, stop_text = q["tp_first"]["instructions"], q["stop_first"]["instructions"]
+    assert tp_text.index("take-profit 62047.4") < tp_text.index("stop-loss 59161.5")
+    assert stop_text.index("stop-loss 59161.5") < stop_text.index("take-profit 62047.4")
+    assert "take-profit is touched first" in q["tp_first"]["criteria"]["true"]
+    assert "stop-loss is touched first" in q["stop_first"]["criteria"]["true"]
 
 
 def test_holding_asks_only_exit_question_and_sells():
@@ -119,11 +132,13 @@ def test_hold_choice_returns_hold():
     assert decision.source == "jev"
 
 
-def test_stop_falls_back_without_atr_and_is_clamped():
-    engine, _ = make_engine(ok(jev_payload(width="wide")))
-    assert engine.decide(snapshot(atr_pct=None), flat()).stop_loss_pct == pytest.approx(3.0)
-    engine, _ = make_engine(ok(jev_payload(width="wide")))
-    assert engine.decide(snapshot(atr_pct=9.0), flat()).stop_loss_pct == pytest.approx(10.0)
+@pytest.mark.parametrize(("atr_pct", "stop"), [(None, 2.0), (0.0, 2.0), (9.0, 10.0), (0.05, 0.3)])
+def test_stop_falls_back_without_atr_and_is_clamped(atr_pct, stop):
+    engine, sent = make_engine(ok(jev_payload(tp_first=0.9, stop_first=0.05)))
+    decision = engine.decide(snapshot(atr_pct=atr_pct), flat())
+    assert decision.stop_loss_pct == pytest.approx(stop)
+    assert decision.take_profit_pct == pytest.approx(2 * stop)
+    assert f"(-{stop:.2f}%)" in sent[0]["questions"]["tp_first"]["instructions"]
 
 
 @pytest.mark.parametrize(
@@ -162,7 +177,7 @@ def test_transport_failures_become_hold(exc, reason):
 
 def test_missing_answers_hold_but_still_count_cost():
     payload = jev_payload()
-    del payload["answers"]["edge"]
+    del payload["answers"]["tp_first"]
     engine, _ = make_engine(ok(payload))
     decision = engine.decide(snapshot(), flat())
     assert decision.action is Action.HOLD
@@ -287,3 +302,92 @@ def test_budget_fallback_is_not_counted_as_an_llm_call():
                           historical_data=False)
     assert result.llm_calls == 0 and result.final_engine_name == "jev"
     assert not any("llamadas al LLM fallaron" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------- real-API findings
+
+
+def test_buy_without_positive_expected_value_after_costs_is_vetoed():
+    # Real Jev (Oct 2026, BTC 5m): BUY with p_buy=0.78 but stop 0.3 % / TP 0.6 % and 0.3 %
+    # round-trip costs. 0.3 * 0.6 - 0.5 * 0.3 - 0.3 = -0.27 %: the trade loses money on average.
+    engine, _ = make_engine(ok(jev_payload(p=0.78, tp_first=0.3, stop_first=0.5)))
+    decision = engine.decide(snapshot(atr_pct=0.1), flat())
+    assert decision.action is Action.HOLD
+    assert decision.source == "jev"
+    assert "no edge after costs" in decision.reasoning and "ev=-0.27%" in decision.reasoning
+
+
+def test_expected_value_uses_the_configured_round_trip_cost():
+    # 0.45 * 3.2 - 0.3 * 1.6 = +0.96 % before costs: positive with 0.3 %, vetoed with 1 %
+    payload = jev_payload(p=0.7, tp_first=0.45, stop_first=0.3)
+    engine, _ = make_engine(ok(payload), round_trip_cost_pct=0.3)
+    assert engine.decide(snapshot(atr_pct=0.8), flat()).action is Action.BUY
+    engine, sent = make_engine(ok(payload), round_trip_cost_pct=1.0)
+    assert engine.decide(snapshot(atr_pct=0.8), flat()).action is Action.HOLD
+    assert "1.00%" in sent[0]["questions"]["action"]["instructions"]
+    assert sent[0]["state"]["round_trip_cost_pct"] == 1.0
+
+
+def test_confidence_is_not_capped_by_the_level_probability():
+    # The old engine used min(p_buy, edge); real Jev never answered edge > 0.5, so every
+    # entry was below JEV_MIN_CONFIDENCE (0.6) and the bot could never open a position.
+    from jev.config import RiskConfig
+
+    engine, _ = make_engine(ok(jev_payload(p=0.75, tp_first=0.45, stop_first=0.3)))
+    decision = engine.decide(snapshot(atr_pct=0.8), flat())
+    assert decision.action is Action.BUY
+    assert decision.confidence == pytest.approx(0.75)
+    assert decision.confidence >= RiskConfig().min_confidence
+
+
+def test_inconsistent_level_probabilities_are_normalised():
+    # p_tp + p_stop = 1.5 > 1 -> 0.6 and 0.4: 0.6 * 3.2 - 0.4 * 1.6 - 0.3 = +0.98 %
+    engine, _ = make_engine(ok(jev_payload(tp_first=0.9, stop_first=0.6)))
+    decision = engine.decide(snapshot(atr_pct=0.8), flat())
+    assert "p_tp=0.60, p_stop=0.40" in decision.reasoning and "ev=+0.98%" in decision.reasoning
+
+
+def test_hold_choice_skips_the_expected_value_but_reports_it():
+    engine, _ = make_engine(ok(jev_payload(action="HOLD", p=0.9, tp_first=0.9, stop_first=0.0)))
+    decision = engine.decide(snapshot(), flat())
+    assert decision.action is Action.HOLD and "stay flat" in decision.reasoning and "ev=" in decision.reasoning
+
+
+def test_non_finite_level_probability_is_rejected():
+    fake = SimpleNamespace(
+        model="jev", usage=SimpleNamespace(input_tokens=10, output_tokens=1),
+        choices={"action": SimpleNamespace(choice="BUY", probabilities={"BUY": 0.9, "HOLD": 0.1})},
+        nouls={"tp_first": SimpleNamespace(noul=float("inf")), "stop_first": SimpleNamespace(noul=0.1)},
+        scores={"size": SimpleNamespace(score=1.0)},
+    )
+    engine = JevDecisionEngine(client=SimpleNamespace(system_one=lambda **kw: fake))
+    decision = engine.decide(snapshot(), flat())
+    assert decision.action is Action.HOLD and decision.source == "fallback"
+
+
+def test_stop_first_more_likely_than_take_profit_vetoes_a_buy():
+    engine, _ = make_engine(ok(jev_payload(p=0.9, tp_first=0.2, stop_first=0.7)))
+    decision = engine.decide(snapshot(atr_pct=0.8), flat())
+    assert decision.action is Action.HOLD and "vetoed" in decision.reasoning
+
+
+def test_factory_wires_the_risk_stop_bounds_into_jev():
+    # The risk manager clamps stops to [min_stop_pct, max_stop_pct]; Jev must be asked about
+    # the same clamped bracket, or the trade would use levels Jev never evaluated.
+    from dataclasses import replace
+
+    from jev.brain.factory import build_engine
+    from jev.config import RiskConfig, Settings
+
+    def jev_with(risk: RiskConfig) -> JevDecisionEngine:
+        engine = build_engine(Settings(engine="jev", risk=risk))
+        assert isinstance(engine, JevDecisionEngine)
+        engine._client = make_engine(ok(jev_payload(tp_first=0.9, stop_first=0.05)))[0]._client
+        return engine
+
+    base = RiskConfig()
+    assert jev_with(replace(base, min_stop_pct=1.0)).decide(snapshot(atr_pct=0.1), flat()).stop_loss_pct == 1.0
+    assert jev_with(replace(base, max_stop_pct=5.0)).decide(snapshot(atr_pct=4.0), flat()).stop_loss_pct == 5.0
+    assert jev_with(replace(base, default_stop_pct=3.0)).decide(snapshot(atr_pct=None), flat()).stop_loss_pct == 3.0
+    with pytest.raises(ValueError):
+        JevDecisionEngine(min_stop_pct=2.0, max_stop_pct=1.0)

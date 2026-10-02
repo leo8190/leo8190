@@ -355,3 +355,20 @@ def test_factory_jev_uses_settings_and_client():
 def test_factory_unknown_engine():
     with pytest.raises(ConfigError):
         build_engine(Settings(engine="magic"))
+
+
+def test_hybrid_with_jev_trades_the_bracket_jev_evaluated():
+    # Rules clamp stops to 8 %, Jev to 10 %: with ATR 4.5 % rules propose 8/16 and Jev evaluates
+    # (and approves, EV > 0) 9/18. The order must use 9/18, the levels Jev's EV was computed on.
+    answers = SimpleNamespace(
+        model="jev-test", usage=SimpleNamespace(input_tokens=1000, output_tokens=0),
+        choices={"action": SimpleNamespace(choice="BUY", probabilities={"BUY": 0.8, "HOLD": 0.2})},
+        nouls={"tp_first": SimpleNamespace(noul=0.5), "stop_first": SimpleNamespace(noul=0.3)},
+        scores={"size": SimpleNamespace(score=2.0)},
+    )
+    jev = JevDecisionEngine(client=SimpleNamespace(system_one=lambda **kw: answers))
+    rules_buy = RULES_BUY.model_copy(update={"stop_loss_pct": 8.0, "take_profit_pct": 16.0})
+    d = HybridDecisionEngine(ScriptedEngine(rules_buy), jev).decide(snap(atr_pct=4.5), FLAT)
+    assert d.action is Action.BUY
+    assert (d.stop_loss_pct, d.take_profit_pct) == (pytest.approx(9.0), pytest.approx(18.0))
+    assert "stop=9.00%, tp=18.00%" in d.reasoning
