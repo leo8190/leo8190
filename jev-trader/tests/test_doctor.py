@@ -106,7 +106,9 @@ def test_live_mode_reports_network_and_keys_without_printing_them():
     assert by_name(run_checks(mainnet, KEY, online=False))["Modo"].status == WARN
 
 
-def test_cli_doctor_offline(monkeypatch, capsys):
+def test_cli_doctor_offline(tmp_path, monkeypatch, capsys):
+    # The CLI loads .env from its working directory; never use the developer's real key.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     assert main(["doctor", "--offline", "--engine", "rules"]) == 0
     out = capsys.readouterr().out
