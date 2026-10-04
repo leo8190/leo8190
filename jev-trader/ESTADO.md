@@ -30,7 +30,7 @@ Logs y PIDs: `logs/paper_5m.log`, `logs/paper_1h.log`, `logs/paper_5m.pid`, `log
 
 ## Próximo paso
 
-- Faltan `JEV_API_KEY` y `JEV_API_SECRET` de Binance Spot Testnet. No se ejecutó `jev live`. La guía de creación de claves ya fue entregada en este chat. Guardarlas en `.env`, nunca en el chat ni en Git.
+- API key y secret de Binance Spot Testnet creados el 04/10/2026; falta que Leonardo los copie desde la pantalla y los guarde como `JEV_API_KEY` y `JEV_API_SECRET` en `.env`. No se ejecutó `jev live`. Nunca guardar secretos en el chat ni en Git.
 - Una vez disponibles, prueba corta con journal separado y capital acotado de prueba:
 
 ```bash
@@ -40,3 +40,12 @@ JEV_MODE=live JEV_USE_TESTNET=true JEV_LIVE_CONFIRM= JEV_LIVE_MAX_CAPITAL=100 JE
 Este comando está preparado; no fue ejecutado. Una decisión HOLD puede comprobar conectividad sin enviar órdenes.
 
 - Dinero real: pendiente de confirmación explícita de Leonardo; monto chico, capital máximo, key sin retiros y whitelist de IP.
+
+## Creación de clave testnet — 04/10/2026
+
+- Preparado 2026-10-04T19:46:14.961411-03:00: ingreso oficial completado en Binance Spot Test Network; formulario `https://testnet.binance.vision/key/generate`, nombre `jev-trader-20261004`, permisos TRADE y USER_DATA. USER_STREAM desactivado.
+- Estado inicial: preparado; luego Leonardo confirmó expresamente en este chat y se pulsó Generate. **Clave creada**, verificada por el mensaje visible `HMAC-SHA-256 Key registered`. Nombre `jev-trader-20261004`, permisos TRADE y USER_DATA. No se leyeron, copiaron ni guardaron secretos por parte del agente.
+- Pestaña de resultado abierta y visible en el Browser integrado de este chat, título `Binance Spot Test Network`; conservada para que Leonardo copie las claves. No cerrar ni navegar hasta que las haya guardado. Comprobante recortado sin secretos: `logs/testnet-key-created.png`.
+- Pedido vigente: el agente genera la clave; Leonardo copia y guarda API key y secret en `.env`. No cerrar la pantalla de resultado ni exponer las claves en el chat cuando se generen.
+
+Confirmación de creación registrada: 2026-10-04T19:51:14.226135-03:00. Próximo paso: Leonardo guarda la API key y el secret en `.env`; después prueba acotada en testnet. Sin uso de dinero real.
