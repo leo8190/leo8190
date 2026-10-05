@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
+.env.1password
+.env.testnet.1password
 *.sqlite3
 *.sqlite3-journal
 *.sqlite3-wal

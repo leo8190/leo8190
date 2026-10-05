@@ -227,6 +227,42 @@ devuelve HOLD y la CLI lo avisa.
 2. En `.env`, configurá `JEV_MODE=live`, `JEV_USE_TESTNET=true`, `JEV_API_KEY=...` y `JEV_API_SECRET=...`.
 3. Ejecutá `jev live`. Se muestra un banner con la red (TESTNET) y el bot opera con fondos de prueba.
 
+### Claves en 1Password
+
+El lanzador opcional evita guardar claves reales en archivos. Usa `op run` y recibe el acceso a
+1Password desde el Llavero de macOS: servicio `codex-1password-service`, cuenta `leonardo-codex`.
+Verifica una cuenta de servicio llamada `Codex lectura` y acceso a una sola bóveda, `Codex`.
+La cuenta debe tener únicamente lectura, configurada en 1Password. El lanzador no crea ni modifica
+cuentas, bóvedas o ítems, y no muestra los errores internos del proveedor.
+
+Preparación de una sola vez:
+
+1. Guardar las claves en un ítem `Jev Trader` de la bóveda `Codex`, con campos `TYPESAFE_API_KEY`,
+   `JEV_API_KEY` y `JEV_API_SECRET`. Estas son las referencias **propuestas** por los ejemplos: hay que
+   verificar que el ítem y los campos existan antes de usarlas. Las dos últimas claves son de Spot Testnet.
+2. Crear los archivos locales copiando `.env.1password.example` a `.env.1password` y
+   `.env.testnet.1password.example` a `.env.testnet.1password`. Sólo contienen referencias `op://`, nunca
+   claves reales. Ambos archivos locales quedan excluidos de Git. El `.env` anterior no se lee ni se reemplaza.
+3. Completar el acceso de la cuenta de servicio y su token en el Llavero por un canal protegido.
+   No poner el token en los archivos, argumentos, logs o historial de terminal.
+
+```bash
+.venv/bin/python -m jev.secure doctor
+.venv/bin/python -m jev.secure paper
+.venv/bin/python -m jev.secure live       # TESTNET; termina después de una iteración
+```
+
+Paper/doctor sólo cargan la clave de TypeSafe; live carga además las dos claves de Binance testnet.
+El token de la cuenta de servicio sólo se entrega a `op`: se elimina del entorno antes de arrancar el bot.
+El lanzador fuerza el motor híbrido con Jev, y `live` siempre fuerza `JEV_MODE=live`,
+`JEV_USE_TESTNET=true` y una confirmación de dinero real vacía. No permite mainnet ni flags de depuración.
+La prueba live usa su propio journal `jev_testnet.sqlite3` y un capital máximo inicial de prueba de
+100 USDT en el ejemplo. Con `--max-iterations N` se puede acotar la duración de paper o live.
+
+Si falta `op`, el token del Llavero, las referencias o la cuenta prevista, no arranca. Las pruebas de
+esta integración son offline: prueban las barreras de acceso con datos sintéticos, sin leer claves reales.
+La configuración externa de 1Password y la primera conexión real deben verificarse por separado.
+
 ## Cargar dinero (modo live)
 
 El bot **no deposita ni retira nada**: opera con el saldo que haya en tu cuenta del exchange, y las claves
