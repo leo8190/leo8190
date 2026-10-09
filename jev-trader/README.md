@@ -213,8 +213,9 @@ jev paper --synthetic --fast --max-iterations 200 --engine rules   # simulación
 jev paper                                                          # precios reales, dinero simulado
 JEV_TIMEFRAME=1h jev paper --journal jev_paper_1h.sqlite3          # recomendado con Jev (ver abajo)
 
-# 4) Estado y journal
+# 4) Estado, journal e informe del forward test
 jev status
+jev report --journal jev_paper_1h.sqlite3   # -> reports/forward-jev_paper_1h.html
 ```
 
 Para usar Jev, pedí acceso en [typesafe.ai](https://typesafe.ai) y poné `TYPESAFE_API_KEY` en `.env`.
@@ -389,6 +390,7 @@ Variables avanzadas, opcionales:
 | `jev paper [--synthetic] [--fast] [--max-iterations N] [--journal RUTA] [--fresh]` | Paper trading en tiempo real: espera cada cierre de vela más 2 s. `--synthetic --fast` simula sin esperas |
 | `jev live [--max-iterations N] [--yes]` | Órdenes reales por ccxt (testnet por defecto). Requiere `JEV_MODE=live` |
 | `jev download --since YYYY-MM-DD [--until YYYY-MM-DD] --out RUTA.csv` | Descarga velas históricas públicas a CSV |
+| `jev report [--journal RUTA] [--out RUTA.html] [--timeframe TF] [--symbol PAR]` | Informe HTML del forward test (paper o testnet) desde un journal, en **solo lectura**: se puede correr con el bot andando. Descuenta depósitos y retiros, y avisa si la muestra es chica, si hubo pausas o si el journal mezcla sesiones |
 | `jev doctor [--offline] [--engine E]` | Chequeo previo de solo lectura: modo, claves (sin mostrarlas), conexión a Jev listando modelos (no gasta tokens) y velas públicas del exchange. Sale con `1` si algo falla |
 | `jev status [--journal RUTA] [--limit N] [--reset-halt]` | Resumen del journal, estado guardado y últimas decisiones y eventos |
 

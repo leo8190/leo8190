@@ -802,6 +802,29 @@ def cmd_status(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK
 
 
+def cmd_report(args: argparse.Namespace, settings: Settings) -> int:
+    from .forward_report import ReportUsageError, build_forward_report
+    from .journal import Journal
+    from .metrics import render_text_summary
+    from .report import write_report
+
+    path = args.journal or settings.journal_path
+    if not Path(path).is_file():
+        raise UsageError(f"no existe el journal {path}")
+    with Journal(path, read_only=True) as journal:  # never writes: safe while the bot runs
+        try:
+            report = build_forward_report(journal, timeframe=args.timeframe, symbol=args.symbol)
+        except ReportUsageError as exc:
+            raise UsageError(str(exc)) from None
+    out = args.out or f"reports/forward-{Path(path).stem}.html"
+    write_report(out, report.html)
+    print(render_text_summary(report.metrics))
+    for warning in report.warnings:
+        print(f"Aviso: {warning}")
+    print(f"\nInforme HTML: {Path(out).resolve()}")
+    return EXIT_OK
+
+
 def cmd_doctor(args: argparse.Namespace, settings: Settings) -> int:
     from .doctor import FAIL, run_checks
 
@@ -895,6 +918,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reset-halt", action="store_true",
                    help="quitar un kill switch activo del estado guardado (detené el bot antes)")
     p.set_defaults(handler=cmd_status)
+
+    p = sub.add_parser("report", help="informe HTML del forward test (paper/testnet) desde un journal, solo lectura")
+    _common(p, market=False, engine=False)
+    p.add_argument("--symbol", help="par del informe (por defecto: el del journal)")
+    p.add_argument("--timeframe", help="timeframe del informe (por defecto: el del journal)")
+    p.add_argument("--journal", help="journal SQLite (por defecto JEV_JOURNAL_PATH)")
+    p.add_argument("--out", help="ruta del HTML (por defecto reports/forward-<journal>.html)")
+    p.set_defaults(handler=cmd_report)
 
     p = sub.add_parser("doctor", help="chequeo previo: claves, conexión a Jev y datos del exchange (solo lectura)")
     _common(p)

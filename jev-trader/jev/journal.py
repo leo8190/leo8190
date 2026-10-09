@@ -14,9 +14,10 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, Iterator
 
 from .models import Action, Decision, Fill, MarketSnapshot, RiskVerdict, TradeRecord
 
@@ -136,12 +137,27 @@ def redact_secrets(value: Any) -> Any:
 class Journal:
     """Append-only trading journal backed by SQLite (``":memory:"`` supported)."""
 
-    def __init__(self, path: str = "jev_journal.sqlite3") -> None:
+    def __init__(self, path: str = "jev_journal.sqlite3", *, read_only: bool = False) -> None:
+        """``read_only=True`` opens an existing journal without ever writing to it (safe while
+        a bot is running on it): no schema creation, no WAL switch, ``query_only`` on."""
         self.path = str(path)
+        self.read_only = read_only
+        self._lock = threading.RLock()
+        if read_only:
+            if self.path == ":memory:" or not Path(self.path).is_file():
+                raise FileNotFoundError(f"no existe el journal {self.path}")
+            uri = f"{Path(self.path).resolve().as_uri()}?mode=ro"
+            if not Path(self.path + "-wal").exists():
+                # No live writer: immutable creates no -wal/-shm side files, which another user's
+                # files could otherwise leave behind and block the bot's next writes.
+                uri += "&immutable=1"
+            self._conn: sqlite3.Connection | None = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA query_only=ON")
+            return
         if self.path != ":memory:" and not self.path.startswith("file:"):
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
-        self._conn: sqlite3.Connection | None = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         if self.path != ":memory:":
             self._try_pragma("PRAGMA journal_mode=WAL")
@@ -149,6 +165,16 @@ class Journal:
         self._conn.commit()
 
     # -- lifecycle -----------------------------------------------------------
+
+    @contextmanager
+    def snapshot(self) -> Iterator[None]:
+        """Run several reads against one consistent snapshot, even while a bot is writing."""
+        with self._lock:
+            self.conn.execute("BEGIN")
+            try:
+                yield
+            finally:
+                self.conn.execute("COMMIT")
 
     def close(self) -> None:
         with self._lock:
@@ -312,6 +338,14 @@ class Journal:
         )
         return [dict(row) for row in rows]
 
+    def events(self, kind: str | None = None) -> list[dict]:
+        """All events (optionally of one kind), oldest first."""
+        if kind is None:
+            rows = self._query("SELECT ts, kind, message FROM events ORDER BY ts, id")
+        else:
+            rows = self._query("SELECT ts, kind, message FROM events WHERE kind = ? ORDER BY ts, id", (kind,))
+        return [dict(row) for row in rows]
+
     def recent_events(self, limit: int = 20) -> list[dict]:
         rows = self._query(
             "SELECT ts, kind, message FROM events ORDER BY ts DESC, id DESC LIMIT ?",
@@ -322,6 +356,15 @@ class Journal:
     def equity_curve(self) -> list[tuple[int, float]]:
         rows = self._query("SELECT ts, equity FROM equity ORDER BY ts, id")
         return [(int(row["ts"]), float(row["equity"])) for row in rows]
+
+    def price_curve(self) -> list[tuple[int, float]]:
+        rows = self._query("SELECT ts, price FROM equity ORDER BY ts, id")
+        return [(int(row["ts"]), float(row["price"])) for row in rows]
+
+    def symbols(self) -> list[str]:
+        """Symbols seen in decisions, most recent first."""
+        rows = self._query("SELECT symbol, MAX(ts) AS last FROM decisions GROUP BY symbol ORDER BY last DESC")
+        return [str(row["symbol"]) for row in rows]
 
     def llm_cost_usd(self, since_ts: int | None = None) -> float:
         """Sum of decision ``cost_usd`` (optionally for decisions with ``ts >= since_ts``)."""
