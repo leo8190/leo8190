@@ -98,3 +98,55 @@ Confirmación de creación registrada: 2026-10-04T19:51:14.226135-03:00. Próxim
 - La configuración completa sigue pendiente. Las referencias locales del bot siguen propuestas, sin acreditar que existan los campos TYPESAFE_API_KEY, JEV_API_KEY y JEV_API_SECRET del ítem Jev Trader en Codex. No falta otra aprobación para crear la misma cuenta.
 - No se leyeron claves de trading ni el .env histórico, no se inició paper/live, no se amplió acceso ni se usó dinero real. La última suite de 686 tests permanece como resultado histórico; no se repitió.
 - Próximo paso: ante un cambio habilitante o pedido manual, comprobar una vez acceso/campos; después resolver referencias por op y reanudar paper 1h. Prueba corta de testnet autorizada, pendiente de claves verificadas. Sin nuevos chats, mensajes, programaciones ni cambios de cuota.
+
+## Pasada programada — 06/10/2026, 16:43 ART — sin cambio habilitante
+
+- Inicio informado por el scheduler: 2026-10-06T19:43:02.761Z; límite absoluto conservado: 2026-10-06T19:48:02.761Z (16:48:02 ART). Registro real: 2026-10-06T16:43:32-03:00. Cierre temprano, sin renovar el plazo.
+- Última salida, cola y estado canónico de credenciales leídos: sigue pendiente la lectura de claves por limitación temporal de consultas de1Password, sin novedad habilitante registrada. No se volvió a consultar al proveedor, leer token/claves/.env, controlar su interfaz ni duplicar al operador.
+- Último log autorizado paper1h termina en Fin de la sesión, 24 pasos, efectivo simulado997,81 USDT, una operación cerrada y PnL realizado−2,19 USDT; no aporta resultado nuevo frente al registro anterior ni acredita proceso activo.
+- No hay siguiente acción distinta ejecutable dentro de esta programación sin acceso acreditado o cargos/procesos nuevos. No se reinició paper, lanzó testnet/live, repitió suite verde, generó goal artificial, despertó chats ni modificó programación/cuota. Sin dinero real ni llamadas nuevas aTypeSafe.
+- Pendiente conservado: ante un cambio habilitante verificar campos por op y retomar sólo el alcance autorizado. Sin nueva intervención requerida ni notificación rutinaria al usuario.
+
+## Plan actualizado por Leonardo — 2026-10-06T21:08:12-03:00
+
+- Leonardo informó que actualizó el plan y pidió continuar. Tipo de plan posterior y ampliación efectiva de cupo SIN VERIFICAR; no confundir el Plan Individual del registro anterior con el plan nuevo.
+- Comprobación inicial bajo el entorno restringido: lectura del Llavero no disponible. La misma comprobación se ejecutó con la autorización acotada de la herramienta para acceder al Llavero/red; terminó con limitación temporal de consultas del proveedor. Esto distingue la restricción local del bloqueo real; no se mostró el token.
+- Un diagnóstico distinto y único del cupo, con captura interna y la cuenta de servicio exacta, no confirmó acceso. No se obtuvieron contadores nuevos ni se repitió. Los1000/1000 del registro compartido son históricos del06/10 a18:04ART, no prueba del cupo posterior al cambio de plan.
+- Autenticación completa, existencia/resolución de campos y conexión del bot siguen pendientes. Sin consultas adicionales, ampliación de permisos, lectura de .env/claves, nuevas cuentas, arranque de paper/live ni dinero real.
+- Próximo paso: acreditar el plan/cupo efectivo o liberación de ventana mediante el flujo de acceso existente; después verificar referencias y retomar paper/testnet ya autorizados. No falta otra aprobación para la misma cuenta ni se inició trabajo en segundo plano.
+
+## Estado tras upgrade confirmado — 2026-10-06T22:38:48-03:00
+
+- Fuente canónica CREDENCIALES_1PASSWORD.md actualizada por el operador de acceso: Business mensual verificado el06/10 a21:21ART. Contador oficial de21:13:30ART: límite diario50000, usadas1000, disponibles49000. Son la última medición de ese operador, no un contador nuevo de este chat. El upgrade quedó acreditado; no continuar presentándolo como compra pendiente.
+- La misma fuente registró la bóveda delegada Codex con0 elementos en la interfaz; las referencias propuestas de Jev Trader no quedaron resueltas ni existe evidencia de sus campos. No inferir claves desde otras bóvedas ni ampliar permisos.
+- Ante el pedido manual «y ahora?», una sola comprobación real del cargador seguro con acceso acotado al Llavero/red todavía terminó por limitación temporal del proveedor. No se repitió ni se atribuyó la causa a consumo del nuevo cupo sin prueba.
+- Conexión del bot pendiente de acceso completo y carga/verificación de las claves necesarias en Codex. Sin lectura de .env histórico, secretos expuestos, navegación duplicada, arranque de paper/live, nuevas llamadasTypeSafe ni dinero real. El operador canónico conserva el flujo compartido; no se lo despertó.
+
+
+## Preparación de Jev Trader en 1Password — 2026-10-08T20:52:05-03:00
+
+- Pedido directo de Leonardo: crear únicamente `Jev Trader` en `Codex` con su sesión personal, campos contraseña exactos `TYPESAFE_API_KEY`, `JEV_API_KEY` y `JEV_API_SECRET`; transferencia por stdin, sin secretos en argumentos, archivos nuevos, logs o chat. No commits. Sustituye para esta tarea la indicación histórica de que Leonardo debía copiar las claves.
+- VERIFICADO EN FUENTE: CLI personal identifica a Leonardo Apollonio; bóveda Codex verificada e ítem Jev Trader ausente. Fuente TypeSafe presente en el .env existente, leída internamente sin mostrar ni modificar su valor.
+- PREPARADO: sesión GitHub existente usada para ingresar a Binance Spot Testnet en Chrome. Formulario HMAC con descripción `jev-trader-op`, TRADE y USER_DATA activos, USER_STREAM desactivado. No se pulsó Generate.
+- PENDIENTE: confirmación inmediata solicitada por la política del navegador de Codex para crear credenciales. Pestaña Chrome `Binance Spot Test Network`, `https://testnet.binance.vision/key/generate`, preservada como handoff. No se creó el ítem ni se ejecutó el doctor.
+- Próximo paso ante confirmación: generar una sola clave, transferir valores internamente al JSON de `op item create -`, usando sesión personal y entrada estándar; verificar tres campos CONCEALED y correr `.venv/bin/python -m jev.secure doctor` una vez. Sin órdenes paper/live, operaciones financieras, cambios de bóveda/cuenta o commits.
+
+
+## Jev Trader en Codex — COMPLETADO — 2026-10-08T21:14:17-03:00
+
+- INFORMADO POR LEONARDO: confirmó generar y guardar la nueva clave. Esta confirmación resuelve el pendiente del registro de preparación del08/10; no se pidió otra aprobación.
+- VERIFICADO EN FUENTE: una única clave HMAC de Binance Spot Testnet `jev-trader-op` generada; registro posterior confirma únicamente TRADE y USER_DATA. Sin USER_STREAM, sin modificar ni revocar las claves anteriores y sin órdenes.
+- ÍTEM CREADO Y VERIFICADO: `Jev Trader`, bóveda `Codex`, con la sesión personal de Leonardo y la integración de escritorio; no se usó la cuenta de servicio para escribir. ID no secreto: `65tbu7357sp4dgoxw3ar4pnq5u`.
+- Tres campos solicitados presentes, no vacíos, de tipo CONCEALED (contraseña), y valores coincidentes con sus fuentes, comprobados internamente sin mostrar los valores: `TYPESAFE_API_KEY`, `JEV_API_KEY`, `JEV_API_SECRET`. Fuente TypeSafe: línea del .env existente; fuente Binance: resultado de la nueva clave.
+- Los valores se transfirieron sólo en memoria y por stdin JSON a la CLI. La categoría Password requiere además su campo principal; los tres nombres exactos solicitados quedaron agregados como campos resolubles. El rechazo inicial por formato no creó ningún ítem; se comprobó su ausencia antes de corregir el formato. No hubo generación de una segunda clave ni ítem duplicado.
+- DOCTOR VERIFICADO: `.venv/bin/python -m jev.secure doctor`, desde la carpeta del proyecto, terminó con código0 y sin `could not find item`. Resuelve TypeSafe mediante Codex lectura; API Jev y datos públicos Binance responden. Resultado: listo para paper trading. El doctor no verifica claves Binance, que sí quedaron comprobadas por lectura personal del ítem.
+- Sin pagos, transferencias, dinero real, arranque paper/live, cambios en otras bóvedas/ítems, secretos nuevos en archivos ni commits. Los archivos de referencias y el .env existente no se modificaron. Los valores temporales se liberaron al finalizar.
+- Este pedido está completo. La prueba testnet del historial queda como tarea separada; no se ejecutó por el pedido de crear el ítem y verificar doctor.
+
+## Credenciales resueltas y sesiones activas — 08/10/2026, 22:20 ART
+
+- Ítem `Jev Trader` creado en la bóveda Codex por otro chat a pedido de Leonardo. `python -m jev.secure doctor`: ✓ clave TypeSafe, API de Jev 421 ms, datos de Binance. Ninguna clave se mostró ni se escribió en archivos.
+- `.env`: se vació `TYPESAFE_API_KEY`. Las claves sólo quedan en 1Password.
+- Paper 1h reanudado con `python -m jev.secure paper` (journal `jev_paper_1h.sqlite3`, log `logs/paper_1h.log`, PID en `logs/paper_1h.pid`). La sesión 5m no se reanuda: con 0,3 % de costo, Jev nunca compra en 5m.
+- Testnet verificada con `python -m jev.secure live --max-iterations 1`: autenticación OK, saldo de prueba 10.000 USDT + 1 BTC no gestionado, decisión HOLD, sin órdenes. Queda corriendo en 1h (journal `jev_testnet.sqlite3`, log `logs/testnet_1h.log`, PID en `logs/testnet_1h.pid`, capital máximo 100 USDT de prueba). El envío de órdenes todavía no se ejercitó: ocurrirá con la primera entrada aprobada.
+- Dinero real: no usado. Requiere confirmación explícita de Leonardo y que él mismo lo lance.
