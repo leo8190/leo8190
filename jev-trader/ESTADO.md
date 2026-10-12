@@ -150,3 +150,10 @@ Confirmación de creación registrada: 2026-10-04T19:51:14.226135-03:00. Próxim
 - Paper 1h reanudado con `python -m jev.secure paper` (journal `jev_paper_1h.sqlite3`, log `logs/paper_1h.log`, PID en `logs/paper_1h.pid`). La sesión 5m no se reanuda: con 0,3 % de costo, Jev nunca compra en 5m.
 - Testnet verificada con `python -m jev.secure live --max-iterations 1`: autenticación OK, saldo de prueba 10.000 USDT + 1 BTC no gestionado, decisión HOLD, sin órdenes. Queda corriendo en 1h (journal `jev_testnet.sqlite3`, log `logs/testnet_1h.log`, PID en `logs/testnet_1h.pid`, capital máximo 100 USDT de prueba). El envío de órdenes todavía no se ejercitó: ocurrirá con la primera entrada aprobada.
 - Dinero real: no usado. Requiere confirmación explícita de Leonardo y que él mismo lo lance.
+
+## Arranque automático — 12/10/2026
+
+- Las sesiones se habían detenido el 10/10 (~01:00 ART, antes de reinicios de la Mac). Resultado acumulado paper 1h: 2 operaciones, ambas perdedoras, PnL realizado −4,44 USDT simulados. Testnet: 0 operaciones.
+- Ahora corren como LaunchAgents de launchd (arrancan al iniciar sesión y se reinician si fallan, con 5 min de espera): `~/Library/LaunchAgents/com.leonardo.jevtrader.paper.plist` y `com.leonardo.jevtrader.testnet.plist`. Ambos usan `python -m jev.secure` (claves desde 1Password) y escriben en `logs/paper_1h.log` y `logs/testnet_1h.log`.
+- Detener: `launchctl bootout gui/$(id -u)/com.leonardo.jevtrader.paper` (y `.testnet`). Volver a activar: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.leonardo.jevtrader.paper.plist`.
+- Ya no usar `nohup` ni los PID de `logs/*.pid`: dos procesos sobre el mismo journal se pisarían.
