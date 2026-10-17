@@ -157,3 +157,9 @@ Confirmación de creación registrada: 2026-10-04T19:51:14.226135-03:00. Próxim
 - Ahora corren como LaunchAgents de launchd (arrancan al iniciar sesión y se reinician si fallan, con 5 min de espera): `~/Library/LaunchAgents/com.leonardo.jevtrader.paper.plist` y `com.leonardo.jevtrader.testnet.plist`. Ambos usan `python -m jev.secure` (claves desde 1Password) y escriben en `logs/paper_1h.log` y `logs/testnet_1h.log`.
 - Detener: `launchctl bootout gui/$(id -u)/com.leonardo.jevtrader.paper` (y `.testnet`). Volver a activar: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.leonardo.jevtrader.paper.plist`.
 - Ya no usar `nohup` ni los PID de `logs/*.pid`: dos procesos sobre el mismo journal se pisarían.
+
+## Primera operación en testnet — VERIFICADO 16/10/2026
+
+- Testnet ejecutó su primera operación con órdenes reales de prueba (order id 3271287 y 3418435): compra de 0,00018 BTC (~15 USDT) a 82.348,01 y venta por señal de las reglas a 82.015,31. PnL −0,06 USDT (−0,40 %). La testnet informó comisión 0; en mainnet serían ~0,1 % por lado.
+- El arranque automático funcionó: las sesiones se reanudaron solas después de los reinicios del 13/10 y del 15/10.
+- Paper 1h sin operaciones nuevas: 2 cerradas, PnL −4,44 USDT simulados. Jev sigue vetando entradas porque el valor esperado después de costos es negativo.
