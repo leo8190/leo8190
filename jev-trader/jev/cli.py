@@ -825,6 +825,62 @@ def cmd_report(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK
 
 
+def _evaluation_datasets(args: argparse.Namespace, settings: Settings) -> tuple[list[tuple[str, list[Candle]]], bool]:
+    """((symbol, candles) per data set, is real historical data)."""
+    if args.synthetic:
+        from .market.synthetic import SyntheticMarket
+
+        market = SyntheticMarket(seed=args.seed, timeframe=settings.timeframe, initial_history=0)
+        return [(settings.symbol, market.generate(args.candles or 6000))], False
+    if not args.csv:
+        raise UsageError("pasá al menos un --csv [PAR=]RUTA (o --synthetic para una demo offline)")
+    from .market.csv_source import CsvMarket
+    from .models import MarketDataError
+
+    datasets = []
+    for item in args.csv:
+        symbol, sep, path = item.partition("=")
+        if not sep:
+            symbol, path = settings.symbol, item
+        if "/" not in symbol:
+            raise UsageError(f"--csv {item!r}: el par debe ser BASE/QUOTE, por ejemplo BTC/USDT=datos.csv")
+        if not Path(path).is_file():
+            raise UsageError(f"no existe el archivo {path}")
+        try:
+            datasets.append((symbol, CsvMarket(path, settings.timeframe).candles))
+        except MarketDataError as exc:  # e.g. the file was downloaded with another timeframe
+            raise UsageError(f"{exc} (pasá el --timeframe con el que lo descargaste)") from None
+    symbols = [symbol for symbol, _ in datasets]
+    if len(set(symbols)) != len(symbols):
+        raise UsageError("hay pares repetidos: usá PAR=RUTA para distinguir cada --csv")
+    return datasets, True
+
+
+def cmd_evaluate(args: argparse.Namespace, settings: Settings) -> int:
+    import json
+
+    from .evaluate import evaluate, render_evaluation
+
+    datasets, historical = _evaluation_datasets(args, settings)
+    total = sum(len(candles) for _, candles in datasets)
+    print(f"Evaluación walk-forward · motor rules · {settings.timeframe} · {len(datasets)} par(es) · "
+          f"{total} velas · {args.folds} tramos por par · comisión {_fmt(settings.fee_pct, 3)} % + slippage "
+          f"{_fmt(settings.slippage_pct, 3)} % por lado\n")
+    try:
+        result = evaluate(datasets, settings, folds=args.folds, warmup=args.warmup, historical_data=historical)
+    except ValueError as exc:
+        raise UsageError(str(exc)) from None
+    print(render_evaluation(result))
+    if not historical:
+        print("\nAviso: datos sintéticos, sin ventaja explotable por construcción. Sirven para probar el "
+              "comando, no la estrategia.")
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+        print(f"\nResultado en JSON: {Path(args.json).resolve()}")
+    return EXIT_OK
+
+
 def cmd_doctor(args: argparse.Namespace, settings: Settings) -> int:
     from .doctor import FAIL, run_checks
 
@@ -918,6 +974,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reset-halt", action="store_true",
                    help="quitar un kill switch activo del estado guardado (detené el bot antes)")
     p.set_defaults(handler=cmd_status)
+
+    p = sub.add_parser("evaluate", help="¿la estrategia de reglas tiene ventaja después de costos? "
+                                        "Walk-forward sobre velas históricas")
+    _common(p, engine=False)
+    p.add_argument("--csv", action="append", metavar="[PAR=]RUTA",
+                   help="CSV de velas (de `jev download`); repetible, p. ej. --csv BTC/USDT=btc.csv --csv ETH/USDT=eth.csv")
+    p.add_argument("--synthetic", action="store_true", help="demo offline con datos sintéticos")
+    p.add_argument("--candles", type=_positive_int, help="con --synthetic: número de velas (por defecto 6000)")
+    p.add_argument("--seed", type=int, default=42, help="con --synthetic: semilla")
+    p.add_argument("--folds", type=_positive_int, default=6, help="tramos consecutivos por par (por defecto 6)")
+    p.add_argument("--warmup", type=_positive_int, default=DEFAULT_WARMUP, help="velas de historia antes de decidir")
+    p.add_argument("--json", help="guardar también el resultado en este archivo JSON")
+    p.set_defaults(handler=cmd_evaluate)
 
     p = sub.add_parser("report", help="informe HTML del forward test (paper/testnet) desde un journal, solo lectura")
     _common(p, market=False, engine=False)

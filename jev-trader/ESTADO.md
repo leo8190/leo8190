@@ -163,3 +163,17 @@ Confirmación de creación registrada: 2026-10-04T19:51:14.226135-03:00. Próxim
 - Testnet ejecutó su primera operación con órdenes reales de prueba (order id 3271287 y 3418435): compra de 0,00018 BTC (~15 USDT) a 82.348,01 y venta por señal de las reglas a 82.015,31. PnL −0,06 USDT (−0,40 %). La testnet informó comisión 0; en mainnet serían ~0,1 % por lado.
 - El arranque automático funcionó: las sesiones se reanudaron solas después de los reinicios del 13/10 y del 15/10.
 - Paper 1h sin operaciones nuevas: 2 cerradas, PnL −4,44 USDT simulados. Jev sigue vetando entradas porque el valor esperado después de costos es negativo.
+
+## Evaluación con historia real — pendiente de correr — 12/11/2026
+
+- Motivo: hasta el último registro (16/10) hubo 3 operaciones en unas dos semanas de paper y testnet. A ese ritmo, juntar las 30 que piden los informes lleva unos cinco meses.
+- Nuevo comando `jev evaluate` (sesión en la nube, **714 tests pasan**): walk-forward del motor `rules` sobre velas históricas, con veredicto `pierde`, `no concluyente` o `ventaja`. Probado sólo con datos sintéticos: desde la nube la red bloquea a Binance.
+- Próximo paso, en la Mac (sólo datos públicos, sin claves ni órdenes):
+
+```bash
+.venv/bin/jev download --symbol BTC/USDT --timeframe 1h --since 2025-11-01 --out data/btc_1h.csv
+.venv/bin/jev download --symbol ETH/USDT --timeframe 1h --since 2025-11-01 --out data/eth_1h.csv
+.venv/bin/jev evaluate --timeframe 1h --csv BTC/USDT=data/btc_1h.csv --csv ETH/USDT=data/eth_1h.csv --json reports/evaluate_1h.json
+```
+
+- Si el veredicto es `pierde` o `no concluyente`, la estrategia de reglas no justifica dinero real: hay que cambiarla antes de seguir juntando operaciones.

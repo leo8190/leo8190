@@ -390,6 +390,7 @@ Variables avanzadas, opcionales:
 | `jev paper [--synthetic] [--fast] [--max-iterations N] [--journal RUTA] [--fresh]` | Paper trading en tiempo real: espera cada cierre de vela más 2 s. `--synthetic --fast` simula sin esperas |
 | `jev live [--max-iterations N] [--yes]` | Órdenes reales por ccxt (testnet por defecto). Requiere `JEV_MODE=live` |
 | `jev download --since YYYY-MM-DD [--until YYYY-MM-DD] --out RUTA.csv` | Descarga velas históricas públicas a CSV |
+| `jev evaluate --csv [PAR=]RUTA … [--folds N] [--timeframe TF] [--json RUTA]` | ¿La estrategia de reglas tiene ventaja después de costos? Walk-forward sobre velas históricas de uno o varios pares, con veredicto: `pierde`, `no concluyente` o `ventaja` |
 | `jev report [--journal RUTA] [--out RUTA.html] [--timeframe TF] [--symbol PAR]` | Informe HTML del forward test (paper o testnet) desde un journal, en **solo lectura**: se puede correr con el bot andando. Descuenta depósitos y retiros, y avisa si la muestra es chica, si hubo pausas o si el journal mezcla sesiones |
 | `jev doctor [--offline] [--engine E]` | Chequeo previo de solo lectura: modo, claves (sin mostrarlas), conexión a Jev listando modelos (no gasta tokens) y velas públicas del exchange. Sale con `1` si algo falla |
 | `jev status [--journal RUTA] [--limit N] [--reset-halt]` | Resumen del journal, estado guardado y últimas decisiones y eventos |
@@ -452,6 +453,33 @@ estuvo invertida solo el 16,7 % del tiempo en un mercado que cayó, no porque te
 y **no tienen un edge explotable**: sirven para probar el sistema de punta a punta, no para evaluar la
 estrategia. Las comisiones y el slippage (~0,3 % por operación completa) se comen cualquier ventaja
 pequeña.
+
+## ¿Tiene ventaja? (`jev evaluate`)
+
+El paper trading junta pocas operaciones por mes: tarda demasiado en decir si la estrategia sirve.
+`jev evaluate` responde antes, con velas históricas reales:
+
+```bash
+jev download --symbol BTC/USDT --timeframe 1h --since 2025-11-01 --out data/btc_1h.csv
+jev download --symbol ETH/USDT --timeframe 1h --since 2025-11-01 --out data/eth_1h.csv
+jev evaluate --timeframe 1h --csv BTC/USDT=data/btc_1h.csv --csv ETH/USDT=data/eth_1h.csv
+```
+
+- Parte la historia en tramos consecutivos (6 por par) y corre cada uno con una cuenta nueva, por el mismo
+  camino que el modo en vivo: gestor de riesgo, comisiones, slippage y ejecución en la apertura siguiente.
+- Junta todas las operaciones cerradas y calcula la **operación media después de costos** con un intervalo de
+  confianza del 95 % (bootstrap).
+- Veredicto:
+  - `pierde`: todo el intervalo está por debajo de cero;
+  - `ventaja`: todo el intervalo está por encima de cero y la mayoría de los tramos ganó;
+  - `no concluyente`: el intervalo incluye el cero, o hay menos de 30 operaciones.
+- Solo evalúa el motor `rules`. Es determinista y no tiene datos de entrenamiento, así que la historia es
+  una prueba justa. Jev y Claude pudieron haber visto ese período: su backtest estaría contaminado.
+
+Límites: si ajustás los parámetros de las reglas mirando estos mismos datos, el resultado deja de ser una
+prueba y pasa a ser un ajuste. Pares que se mueven juntos (BTC y ETH) no dan operaciones independientes, así
+que el intervalo real es más ancho que el informado. Un veredicto `ventaja` es evidencia de backtest: se
+confirma en paper antes de arriesgar plata.
 
 ## Tests
 
